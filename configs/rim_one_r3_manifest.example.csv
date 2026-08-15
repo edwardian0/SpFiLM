@@ -1,0 +1,3 @@
+sample_id,split,image_path,disc_mask_path,cup_mask_path,encoding,stratum
+replace_me,train,relative/path/to/image.png,relative/path/to/disc.png,relative/path/to/cup.png,foreground_high,all
+

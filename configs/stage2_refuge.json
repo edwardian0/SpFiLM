@@ -1,0 +1,22 @@
+{
+  "experiment_name": "stage2_refuge_plain_unet",
+  "dataset": "refuge",
+  "data_root": "../../datasets/Refuge",
+  "output_dir": "artifacts/stage2_refuge",
+  "seed": 42,
+  "image_size": 512,
+  "batch_size": 2,
+  "num_workers": 0,
+  "epochs": 40,
+  "patience": 8,
+  "learning_rate": 0.001,
+  "weight_decay": 0.00001,
+  "base_channels": 16,
+  "test_fraction": 0.2,
+  "val_fraction": 0.2,
+  "threshold": 0.5,
+  "horizontal_flip_probability": 0.5,
+  "rotation_degrees": 10.0,
+  "brightness_contrast": 0.1,
+  "requested_device": "auto"
+}

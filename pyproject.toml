@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spfilm-fundus"
+version = "0.1.0"
+description = "Reproducible fundus-domain baselines for the SpFiLM project"
+requires-python = ">=3.10"
+dependencies = [
+  "matplotlib>=3.8",
+  "numpy>=1.26",
+  "Pillow>=10.0",
+  "torch>=2.2"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
