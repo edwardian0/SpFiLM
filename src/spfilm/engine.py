@@ -5,6 +5,7 @@ import json
 import math
 import random
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,13 @@ from .data import (
     stratified_partition,
 )
 from .losses import BCEDiceLoss
-from .metrics import OverlapAccumulator
+from .metrics import (
+    CHANNEL_NAMES,
+    DEGENERATE_POLICY,
+    OverlapAccumulator,
+    metric_frame,
+    summarise_per_image_csv,
+)
 from .model import PlainUNet
 from .visualization import (
     save_mask_contact_sheet,
@@ -46,6 +53,7 @@ class Stage2Config:
     num_workers: int = 0
     epochs: int = 40
     patience: int = 8
+    min_epochs: int = 0
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
     base_channels: int = 16
@@ -218,11 +226,12 @@ def train_one_epoch(
     scaler: torch.amp.GradScaler,
     device: torch.device,
     max_batches: int | None = None,
+    repair_counter: dict[str, int] | None = None,
 ) -> float:
     model.train()
     total_loss = 0.0
     sample_count = 0
-    for batch_index, (images, targets, _) in enumerate(loader):
+    for batch_index, (images, targets, metadata) in enumerate(loader):
         images = images.to(device, non_blocking=device.type == "cuda")
         targets = targets.to(device, non_blocking=device.type == "cuda")
         optimizer.zero_grad(set_to_none=True)
@@ -236,11 +245,25 @@ def train_one_epoch(
         scaler.update()
         total_loss += loss.item() * images.shape[0]
         sample_count += images.shape[0]
+        if repair_counter is not None:
+            _accumulate_cup_repairs(repair_counter, metadata)
         if max_batches is not None and batch_index + 1 >= max_batches:
             break
     if sample_count == 0:
         raise RuntimeError("Training loader yielded no samples")
     return total_loss / sample_count
+
+
+def _accumulate_cup_repairs(counter: dict[str, int], metadata: dict[str, Any]) -> None:
+    """Tally the cup-within-disc repairs the dataset applied to this batch."""
+
+    repairs = metadata.get("cup_repair_pixels")
+    if repairs is None:
+        return
+    pixels = [int(value) for value in repairs]
+    counter["repaired_samples"] += sum(1 for value in pixels if value > 0)
+    counter["repaired_pixels"] += sum(pixels)
+    counter["drawn_samples"] += len(pixels)
 
 
 @torch.inference_mode()
@@ -251,12 +274,14 @@ def evaluate(
     device: torch.device,
     threshold: float,
     max_batches: int | None = None,
+    per_image_csv: str | Path | None = None,
 ) -> dict[str, Any]:
     model.eval()
     total_loss = 0.0
     sample_count = 0
     overlap = OverlapAccumulator(threshold=threshold)
     sample_ids: list[str] = []
+    image_size = 0
     for batch_index, (images, targets, metadata) in enumerate(loader):
         images = images.to(device, non_blocking=device.type == "cuda")
         targets = targets.to(device, non_blocking=device.type == "cuda")
@@ -264,8 +289,9 @@ def evaluate(
         loss = criterion(logits, targets)
         total_loss += loss.item() * images.shape[0]
         sample_count += images.shape[0]
-        overlap.update(logits, targets)
+        overlap.update(logits, targets, image_ids=metadata["sample_id"])
         sample_ids.extend(metadata["sample_id"])
+        image_size = targets.shape[-1]
         if max_batches is not None and batch_index + 1 >= max_batches:
             break
     if sample_count == 0:
@@ -274,8 +300,16 @@ def evaluate(
         "loss": total_loss / sample_count,
         "evaluated_sample_count": sample_count,
         "sample_ids": sample_ids,
+        "metric_frame": metric_frame(image_size),
+        "degenerate_case_policy": DEGENERATE_POLICY,
     }
-    metrics.update(overlap.compute())
+    if per_image_csv is None:
+        metrics.update(overlap.compute())
+    else:
+        # The written CSV is the single source the summary is reduced from.
+        csv_path = overlap.write_per_image_csv(per_image_csv)
+        metrics["per_image_csv"] = str(csv_path)
+        metrics.update(summarise_per_image_csv(csv_path))
     return metrics
 
 
@@ -290,8 +324,16 @@ def run_experiment(
     config: Stage2Config,
     project_root: str | Path,
     smoke: bool = False,
+    records: Sequence[FundusRecord] | None = None,
+    epoch_callback: Callable[[dict[str, float], bool], None] | None = None,
 ) -> dict[str, Any]:
-    """Audit, split, train, and evaluate the Stage 2 single-domain baseline."""
+    """Audit, split, train, and evaluate the Stage 2 single-domain baseline.
+
+    ``records`` lets a caller supply an already-discovered record list (the same
+    discovery this function would run) instead of reading the dataset twice.
+    ``epoch_callback`` receives each epoch's history row and whether it was the new
+    best; when given it replaces the default per-epoch print.
+    """
 
     project_root = Path(project_root).expanduser().resolve()
     if smoke:
@@ -311,7 +353,11 @@ def run_experiment(
 
     seed_everything(config.seed)
     device = choose_device(config.requested_device)
-    records = discover_config_records(config, project_root)
+    records = (
+        discover_config_records(config, project_root)
+        if records is None
+        else list(records)
+    )
     audit = audit_records(records)
     splits = build_splits(config, records)
     split_counts = {name: len(values) for name, values in splits.items()}
@@ -357,6 +403,7 @@ def run_experiment(
     best_val_loss = math.inf
     best_epoch = 0
     epochs_without_improvement = 0
+    cup_repairs = {"repaired_samples": 0, "repaired_pixels": 0, "drawn_samples": 0}
     training_started = time.perf_counter()
     for epoch in range(1, config.epochs + 1):
         epoch_started = time.perf_counter()
@@ -368,6 +415,7 @@ def run_experiment(
             scaler,
             device,
             max_batches=max_batches,
+            repair_counter=cup_repairs,
         )
         val_metrics = evaluate(
             model,
@@ -392,14 +440,19 @@ def run_experiment(
         }
         history.append(row)
         _write_history(history, output_dir / "history.csv")
-        print(
-            f"epoch={epoch:02d} train_loss={train_loss:.4f} "
-            f"val_loss={val_loss:.4f} "
-            f"disc_dice={row['val_disc_dice']:.4f} "
-            f"cup_dice={row['val_cup_dice']:.4f}"
-        )
+        is_best = val_loss < best_val_loss - 1e-5
+        if epoch_callback is None:
+            print(
+                f"epoch={epoch:02d} train_loss={train_loss:.4f} "
+                f"val_loss={val_loss:.4f} "
+                f"disc_dice={row['val_disc_dice']:.4f} "
+                f"cup_dice={row['val_cup_dice']:.4f}",
+                flush=True,
+            )
+        else:
+            epoch_callback(row, is_best)
 
-        if val_loss < best_val_loss - 1e-5:
+        if is_best:
             best_val_loss = val_loss
             best_epoch = epoch
             epochs_without_improvement = 0
@@ -416,8 +469,11 @@ def run_experiment(
             )
         else:
             epochs_without_improvement += 1
-        if epochs_without_improvement >= config.patience:
-            print(f"early_stopping best_epoch={best_epoch}")
+        # min_epochs gates only the early-stop trigger; LR scheduling and
+        # checkpointing above are untouched. Val loss is dominated by disc, so cup
+        # Dice can sit near zero for many epochs before soft Dice pulls it out.
+        if epoch >= config.min_epochs and epochs_without_improvement >= config.patience:
+            print(f"early_stopping best_epoch={best_epoch}", flush=True)
             break
 
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -429,6 +485,7 @@ def run_experiment(
         device,
         threshold=config.threshold,
         max_batches=max_batches,
+        per_image_csv=output_dir / "test_per_image_metrics.csv",
     )
     save_training_curves(history, output_dir / "training_curves.png")
     save_prediction_gallery(
@@ -449,9 +506,19 @@ def run_experiment(
         "checkpoint_selection": "lowest validation BCE + soft Dice loss",
         "training_seconds": time.perf_counter() - training_started,
         "split_counts": split_counts,
+        "cup_within_disc_repairs": {
+            **cup_repairs,
+            "policy": (
+                "augmented training samples whose cup leaked outside the disc were "
+                "repaired in place with cup &= disc rather than raising"
+            ),
+        },
         "test": test_metrics,
         "reporting_rule": "Disc and cup metrics are separate; no combined Dice is reported.",
+        "metric_frame": test_metrics["metric_frame"],
+        "degenerate_case_policy": DEGENERATE_POLICY,
         "artifacts": {
+            "test_per_image_metrics": str(output_dir / "test_per_image_metrics.csv"),
             "checkpoint": str(checkpoint_path),
             "history": str(output_dir / "history.csv"),
             "split_manifest": str(output_dir / "split_manifest.csv"),
@@ -467,8 +534,27 @@ def run_experiment(
     (output_dir / "resolved_config.json").write_text(
         json.dumps(asdict(config), indent=2), encoding="utf-8"
     )
-    print(
-        f"test_disc_dice={test_metrics['disc']['dice_mean']:.4f} "
-        f"test_cup_dice={test_metrics['cup']['dice_mean']:.4f}"
-    )
+    _print_test_results(test_metrics, config.image_size)
     return report
+
+
+def _print_test_results(test_metrics: dict[str, Any], image_size: int) -> None:
+    print(
+        f"test results | Dice and IoU unitless | HD95 in {image_size}x{image_size} "
+        "letterboxed-grid pixels (not mm, not native pixels) | accuracy over all "
+        "pixels | disc and cup separate",
+        flush=True,
+    )
+    for name in CHANNEL_NAMES:
+        structure = test_metrics[name]
+        hd95_mean = structure["hd95_mean"]
+        hd95_text = "undefined" if hd95_mean is None else f"{hd95_mean:.2f}px"
+        print(
+            f"  {name:<4} dice={structure['dice_mean']:.4f} "
+            f"iou={structure['iou_mean']:.4f} "
+            f"hd95={hd95_text} "
+            f"acc={structure['accuracy_mean']:.4f} "
+            f"hd95_excluded={structure['hd95_excluded_count']}"
+            f"/{structure['sample_count']}",
+            flush=True,
+        )

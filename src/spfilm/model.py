@@ -10,10 +10,14 @@ class DoubleConv(nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int) -> None:
         super().__init__()
+        # InstanceNorm, not BatchNorm: SpFiLM will modulate normalized features, so
+        # the baseline has to normalize the same way for the arms to be comparable.
         self.layers = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.InstanceNorm2d(out_channels, affine=True),
             nn.ReLU(inplace=True),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.InstanceNorm2d(out_channels, affine=True),
             nn.ReLU(inplace=True),
         )
 

@@ -112,7 +112,7 @@ def discover_refuge_training(root: str | Path) -> list[FundusRecord]:
     return [
         FundusRecord(
             sample_id=stem,
-            domain="refuge_train_camera",
+            domain="refuge_zeiss",
             image_path=images[stem],
             combined_mask_path=masks[stem],
             mask_encoding="refuge_0_cup_128_disc_255_background",
@@ -617,15 +617,20 @@ class FundusSegmentationDataset(Dataset):
         mask_array = np.stack(
             [np.asarray(mask, dtype=np.uint8) >= 128 for mask in mask_images]
         ).astype(np.float32)
-        if np.any(mask_array[1] > mask_array[0]):
-            raise DatasetLayoutError(
-                f"Transform broke cup-within-disc contract for {record.sample_id}"
-            )
+        # Independent nearest-neighbour resampling of the two channels can, on a thin
+        # rim, leave a few cup pixels outside the disc. Repair instead of raising: an
+        # augmentation-dependent crash would throw away every epoch since the last
+        # checkpoint. The count travels in the metadata so it survives DataLoader
+        # workers and can be reported rather than silently absorbed.
+        cup_repair_pixels = int(np.count_nonzero(mask_array[1] > mask_array[0]))
+        if cup_repair_pixels:
+            mask_array[1] = np.minimum(mask_array[1], mask_array[0])
         mask_tensor = torch.from_numpy(mask_array)
         metadata = {
             "sample_id": record.sample_id,
             "domain": record.domain,
             "image_path": str(record.image_path),
+            "cup_repair_pixels": cup_repair_pixels,
         }
         return image_tensor, mask_tensor, metadata
 
@@ -635,3 +640,10 @@ def seed_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % (2**32)
     random.seed(worker_seed)
     np.random.seed(worker_seed)
+
+
+def compose_lodo_fold(
+        domain_partitions: list,
+        held_out_domain,
+):
+    pass

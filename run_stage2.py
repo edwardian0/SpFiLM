@@ -30,7 +30,7 @@ def audit_all(output_path: Path) -> dict[str, object]:
     datasets_root = WORKSPACE_ROOT / "datasets"
     report: dict[str, object] = {}
     for name, discover, root in (
-        ("refuge", discover_refuge_training, datasets_root / "Refuge"),
+        ("refuge", discover_refuge_training, datasets_root / "REFUGE"),
         ("drishti", discover_drishti, datasets_root / "DRISHTI-GS"),
     ):
         try:
@@ -50,7 +50,7 @@ def audit_all(output_path: Path) -> dict[str, object]:
 def inspect_dataset(dataset: str, output_path: Path, count: int, seed: int) -> Path:
     datasets_root = WORKSPACE_ROOT / "datasets"
     if dataset == "refuge":
-        records = discover_refuge_training(datasets_root / "Refuge")
+        records = discover_refuge_training(datasets_root / "REFUGE")
     elif dataset == "drishti":
         records = discover_drishti(datasets_root / "DRISHTI-GS")
     else:
