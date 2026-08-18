@@ -7,7 +7,7 @@
   "image_size": 512,
   "batch_size": 8,
   "num_workers": 8,
-  "epochs": 150,
+  "epochs": 300,
   "patience": 20,
   "min_epochs": 30,
   "learning_rate": 0.001,

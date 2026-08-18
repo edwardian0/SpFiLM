@@ -20,7 +20,7 @@
 set -euo pipefail
 
 CODE_ROOT="/users/k23123868/edward/spfilm"
-CONFIG="$CODE_ROOT/configs/stage2_refuge_create.json"
+# CONFIG="$CODE_ROOT/configs/stage2_refuge_create.json"
 OUT_DIR="$CODE_ROOT/artifacts/runs/refuge_s2_${SLURM_JOB_ID}"
 
 mkdir -p /users/k23123868/edward/logs "$OUT_DIR"
