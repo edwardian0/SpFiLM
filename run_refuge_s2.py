@@ -56,8 +56,11 @@ DEFAULT_BATCH_SIZE = 8
 SMOKE_BATCH_SIZE = 2
 SMOKE_EPOCHS = 2
 SMOKE_RECORD_COUNT = 4
-FULL_RECORD_COUNT = 400
-FULL_SPLIT_EXPECTED = {"train": 256, "val": 64, "test": 80}
+FULL_POOL = {"refuge": 400, "drishti": 101}
+FULL_SPLIT_EXPECTED = {
+    "refuge": {"train": 256, "val": 64, "test": 80},
+    "drishti": {"train": 40, "val": 10, "test": 51},
+}
 DEEP_SUPERVISION_NOTE = (
     "deep supervision is DEFERRED for this run (single-head output, single-tensor "
     "loss); it will be added to all arms together at a later step"
@@ -69,6 +72,27 @@ INPUT_POLICY_NOTE = (
     "full image, no ROI crop: the whole fundus is aspect-preserving letterboxed "
     "onto a square canvas (2124x2056 -> 512x496 centre-pasted on 512x512)"
 )
+
+
+def labels_for_dataset(dataset: str) -> dict[str, str]:
+    """Return the disk-facing labels for a supported Stage 2 dataset."""
+
+    labels = {
+        "refuge": {
+            "artifact_prefix": "refuge_s2",
+            "domain": "refuge_zeiss",
+            "provenance": "REFUGE Training400, Zeiss Visucam",
+        },
+        "drishti": {
+            "artifact_prefix": "drishti_s2",
+            "domain": "drishti_gs",
+            "provenance": "Drishti-GS",
+        },
+    }
+    try:
+        return labels[dataset]
+    except KeyError:
+        raise SystemExit(f"unsupported dataset for labels: {dataset!r}") from None
 
 
 def _run(command: Sequence[str]) -> str:
@@ -155,6 +179,7 @@ def resolve_config(args: argparse.Namespace) -> tuple[Stage2Config, Path]:
     """Apply the CLI overrides to the frozen config and pick the run directory."""
 
     config = Stage2Config.from_json(args.config.resolve())
+    labels = labels_for_dataset(config.dataset)
     # The full run takes batch_size/num_workers/fractions from the frozen config;
     # only --smoke overrides them. num_workers=0 is a macOS shared-memory artefact
     # and must not be forced onto Linux, where decode is the epoch bottleneck.
@@ -193,7 +218,12 @@ def resolve_config(args: argparse.Namespace) -> tuple[Stage2Config, Path]:
             args.out_dir if args.out_dir.is_absolute() else PROJECT_ROOT / args.out_dir
         )
     else:
-        run_dir = PROJECT_ROOT / "artifacts" / "runs" / f"refuge_s2{suffix}_{timestamp}"
+        run_dir = (
+            PROJECT_ROOT
+            / "artifacts"
+            / "runs"
+            / f"{labels['artifact_prefix']}{suffix}_{timestamp}"
+        )
     run_dir = run_dir.resolve()
     try:
         relative = run_dir.relative_to(PROJECT_ROOT)
@@ -201,7 +231,9 @@ def resolve_config(args: argparse.Namespace) -> tuple[Stage2Config, Path]:
         raise SystemExit(
             f"--out-dir must stay inside {PROJECT_ROOT}, got {run_dir}"
         ) from None
-    overrides["experiment_name"] = f"refuge_s2_plain_unet{suffix}_{timestamp}"
+    overrides["experiment_name"] = (
+        f"{labels['artifact_prefix']}_plain_unet{suffix}_{timestamp}"
+    )
     overrides["output_dir"] = str(relative)
     return replace(config, **overrides), run_dir.resolve()
 
@@ -254,9 +286,28 @@ def print_header(config: Stage2Config, device: torch.device, run_dir: Path, smok
 
 
 def print_data_block(
-    config: Stage2Config, records: Sequence[FundusRecord], strata: Sequence[str]
+    config: Stage2Config,
+    records: Sequence[FundusRecord],
+    strata: Sequence[str],
+    *,
+    smoke: bool,
 ) -> None:
     """Report the splits, the first training batch, and the target pixel balance."""
+
+    expected_split: dict[str, int] = {}
+    if not smoke:
+        try:
+            expected_pool = FULL_POOL[config.dataset]
+            expected_split = FULL_SPLIT_EXPECTED[config.dataset]
+        except KeyError:
+            raise SystemExit(
+                f"split check FAILED: unknown dataset {config.dataset!r}"
+            ) from None
+        if len(records) != expected_pool:
+            raise SystemExit(
+                f"split check FAILED: expected {expected_pool} records for "
+                f"{config.dataset!r}, got {len(records)}"
+            )
 
     splits = build_splits(config, list(records))
     print("data", flush=True)
@@ -279,21 +330,26 @@ def print_data_block(
     )
     print(f"  domain           {sorted({record.domain for record in records})}", flush=True)
 
-    # Guard against the full run silently inheriting the --smoke fractions
-    # (test=0.25, val=0.5). On all 400 REFUGE records, 0.2/0.2 must give 256/64/80.
-    if len(records) == FULL_RECORD_COUNT:
+    # Guard against a full run silently inheriting --smoke fractions or using a
+    # partial provider pool. Smoke runs continue to bypass this production gate.
+    if not smoke:
         actual = {name: len(splits[name]) for name in ("train", "val", "test")}
         print(
             f"  fractions        test={config.test_fraction} val={config.val_fraction}"
             f" -> train/val/test = {actual['train']}/{actual['val']}/{actual['test']}",
             flush=True,
         )
-        if actual != FULL_SPLIT_EXPECTED:
+        if actual != expected_split:
             raise SystemExit(
-                f"split check FAILED: expected {FULL_SPLIT_EXPECTED}, got {actual}. "
+                f"split check FAILED: expected {expected_split}, got {actual}. "
                 "The full run must not inherit the --smoke fractions (0.25/0.5)."
             )
-        print("  split_check      PASS (256/64/80, smoke overrides not applied)", flush=True)
+        print(
+            "  split_check      PASS "
+            f"({expected_split['train']}/{expected_split['val']}/"
+            f"{expected_split['test']}, smoke overrides not applied)",
+            flush=True,
+        )
 
     # Same dataset construction the engine uses, so these are the tensors that will
     # actually be trained on. The engine re-seeds before building its own loaders.
@@ -370,9 +426,12 @@ def _hd95_cell(structure: dict[str, Any]) -> str:
 
 def format_final_block(report: dict[str, Any], config: Stage2Config) -> str:
     test = report["test"]
+    labels = labels_for_dataset(config.dataset)
     lines: list[str] = []
     lines.append("=" * 96)
-    lines.append("TEST RESULTS (in-domain: trained and tested on refuge_zeiss)")
+    lines.append(
+        f"TEST RESULTS (in-domain: trained and tested on {labels['domain']})"
+    )
     lines.append("=" * 96)
     lines.append(f"experiment        {report['experiment_name']}")
     lines.append(f"device            {report['device']}")
@@ -431,13 +490,14 @@ def format_final_block(report: dict[str, Any], config: Stage2Config) -> str:
 def write_run_notes(run_dir: Path, config: Stage2Config, report: dict[str, Any]) -> Path:
     path = run_dir / "RUN_NOTES.md"
     repairs = report["cup_within_disc_repairs"]
+    labels = labels_for_dataset(config.dataset)
     path.write_text(
         "\n".join(
             (
                 f"# {report['experiment_name']}",
                 "",
-                f"- Step 2, in-domain: trained and tested on `refuge_zeiss` "
-                f"(REFUGE Training400, Zeiss Visucam) only.",
+                f"- Step 2, in-domain: trained and tested on `{labels['domain']}` "
+                f"({labels['provenance']}) only.",
                 f"- Git commit: `{git_revision()}`",
                 f"- Device: {report['device']}; seed {config.seed}; "
                 f"{config.image_size}px letterbox canvas.",
@@ -488,7 +548,7 @@ def main() -> int:
             flush=True,
         )
     strata = sorted({record.stratum for record in records})
-    print_data_block(config, records, strata)
+    print_data_block(config, records, strata, smoke=args.smoke)
 
     total_epochs = config.epochs
     print("training (no tqdm; one line per epoch, * marks a new best checkpoint)", flush=True)

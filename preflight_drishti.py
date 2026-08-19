@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Preflight checks for the Step 2 REFUGE baseline on CREATE.
+"""Preflight checks for a Step 2 fundus baseline on CREATE.
 
-Run on a compute node, never the login node:
+Run this explicit gate on a compute node before ``sbatch``. It is deliberately
+not invoked from ``submit_drishti_s2.sh``, because that would run only after the
+job had already been submitted:
 
     srun -p interruptible_gpu --gres=gpu:1 --time=0:10:00 \
-      bash -l oncompute.sh python -u preflight.py 2>/dev/null
+      bash -l /users/k23123868/edward/spfilm/oncompute.sh \
+      python -u /users/k23123868/edward/spfilm/preflight_drishti.py \
+      --config /users/k23123868/edward/spfilm/configs/stage2_drishti_create.json
 
 Exit 0 = every hard gate passed, safe to sbatch.
 Exit 1 = at least one hard gate failed; the message says which.
@@ -20,12 +24,16 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
-DEFAULT_CONFIG = "configs/stage2_refuge_create.json"
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "stage2_drishti_create.json"
+DEFAULT_OUT_PARENT = PROJECT_ROOT / "artifacts" / "runs"
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-# Expected per-directory file counts under data_root, order-independent.
-# REFUGE Training400: 40 glaucoma / 360 non-glaucoma, images and masks.
-EXPECTED_COUNTS = [40, 40, 360, 360]
+# Expected paired record totals after dataset-specific discovery. Drishti is the
+# provider's 50-image training pool plus its locked 51-image test pool.
+EXPECTED_RECORD_COUNTS = {"refuge": 400, "drishti": 101}
 
 WARNINGS: list[str] = []
 
@@ -117,20 +125,33 @@ def resolve_case_insensitive(path: Path) -> Path | None:
     return cur
 
 
-def check_data(config_path: Path) -> tuple[bool, Path | None]:
+def check_data(
+    config_path: Path,
+) -> tuple[bool, Path | None, str | None, list[Any]]:
     hdr("config / data_root")
     if not config_path.exists():
         print(f"  FAIL: config not found at {config_path.resolve()}")
-        return False, None
+        return False, None, None, []
     print(f"  config                {config_path.resolve()}")
 
     cfg = json.loads(config_path.read_text())
+    dataset = find_key(cfg, "dataset")
+    if dataset not in EXPECTED_RECORD_COUNTS:
+        print(
+            "  FAIL: unsupported config dataset "
+            f"{dataset!r}; expected one of {sorted(EXPECTED_RECORD_COUNTS)}"
+        )
+        return False, None, None, []
     raw = find_key(cfg, "data_root")
     if raw is None:
         print("  FAIL: no 'data_root' key anywhere in the config")
-        return False, None
+        return False, None, dataset, []
 
     root = Path(str(raw)).expanduser()
+    if not root.is_absolute():
+        root = PROJECT_ROOT / root
+    root = root.resolve()
+    print(f"  dataset               {dataset}")
     print(f"  data_root (config)    {root}")
 
     if not root.exists():
@@ -146,7 +167,7 @@ def check_data(config_path: Path) -> tuple[bool, Path | None]:
                 print(f"        contents of {parent}:")
                 for c in sorted(parent.iterdir())[:20]:
                     print(f"          {c.name}")
-        return False, None
+        return False, None, dataset, []
 
     print("  exists                yes")
 
@@ -157,7 +178,7 @@ def check_data(config_path: Path) -> tuple[bool, Path | None]:
             counts[d.relative_to(root)] = n
     if not counts:
         print("  FAIL: data_root exists but contains no files in any subdirectory")
-        return False, None
+        return False, None, dataset, []
 
     print("  per-directory counts:")
     for d, n in counts.items():
@@ -165,17 +186,35 @@ def check_data(config_path: Path) -> tuple[bool, Path | None]:
 
     total = sum(counts.values())
     print(f"    {total:>6}  TOTAL")
-    if sorted(counts.values()) != sorted(EXPECTED_COUNTS):
-        warn(f"counts {sorted(counts.values())} != expected {sorted(EXPECTED_COUNTS)} "
-             "— check this is Training400 and nothing is missing or duplicated")
 
-    return True, root
+    try:
+        from spfilm.data import discover_drishti, discover_refuge_training
+
+        discover = {
+            "refuge": discover_refuge_training,
+            "drishti": discover_drishti,
+        }[dataset]
+        records = discover(root)
+    except Exception as exc:
+        print(f"  FAIL: {dataset} dataset discovery failed: {exc}")
+        return False, root, dataset, []
+
+    expected = EXPECTED_RECORD_COUNTS[dataset]
+    actual = len(records)
+    print(f"  paired records        {actual} (expected {expected})")
+    if actual != expected:
+        print(
+            f"  FAIL: {dataset} expected {expected} paired records, found {actual}"
+        )
+        return False, root, dataset, records
+
+    return True, root, dataset, records
 
 
 # --------------------------------------------------------------------------
 # 3. mask convention (soft check)
 # --------------------------------------------------------------------------
-def check_mask_values(root: Path) -> None:
+def check_mask_values(root: Path, dataset: str, records: list[Any]) -> None:
     hdr("mask convention (soft)")
     try:
         import numpy as np
@@ -184,25 +223,38 @@ def check_mask_values(root: Path) -> None:
         warn(f"cannot import numpy/PIL ({exc}); skipping mask check")
         return
 
-    candidates = [p for p in root.rglob("*")
-                  if p.suffix.lower() in {".bmp", ".png", ".gif", ".tif", ".tiff"}]
-    if not candidates:
-        warn("no mask-like files (.bmp/.png/.gif/.tif) found under data_root; skipping")
+    if not records:
+        warn("dataset discovery returned no records; skipping mask check")
         return
 
-    sample = sorted(candidates)[0]
-    arr = np.array(Image.open(sample))
-    vals = np.unique(arr)
-    print(f"  sample                {sample.relative_to(root)}")
-    print(f"  shape / dtype         {arr.shape} {arr.dtype}")
-    print(f"  unique values         {vals[:10].tolist()}{' ...' if vals.size > 10 else ''}")
-    if set(vals.tolist()) <= {0, 128, 255}:
-        print("  convention            {0=cup, 128=rim, 255=background} as expected")
-        cup_frac = float((arr == 0).mean())
-        print(f"  cup fraction          {cup_frac:.4%}  (expect ~0.47% on average)")
+    record = sorted(records, key=lambda item: item.sample_id)[0]
+    paths = record.mask_paths
+    labels = ("combined",) if len(paths) == 1 else ("disc", "cup")
+    allowed_by_dataset = {
+        "refuge": {0, 128, 255},
+        "drishti": {0, 64, 128, 191, 255},
+    }
+    allowed = allowed_by_dataset[dataset]
+    print(f"  sample id             {record.sample_id}")
+    for label, sample in zip(labels, paths):
+        arr = np.array(Image.open(sample))
+        vals = np.unique(arr)
+        print(f"  {label + ' mask':<22}{sample.relative_to(root)}")
+        print(f"    shape / dtype       {arr.shape} {arr.dtype}")
+        print(
+            f"    unique values       {vals[:10].tolist()}"
+            f"{' ...' if vals.size > 10 else ''}"
+        )
+        unexpected = set(vals.tolist()) - allowed
+        if unexpected:
+            warn(
+                f"{dataset} {label} mask contains values outside "
+                f"{sorted(allowed)}: {sorted(unexpected)}"
+            )
+    if dataset == "refuge":
+        print("  convention            {0=cup, 128=rim, 255=background}")
     else:
-        warn("values are not a subset of {0,128,255} — confirm this file is a mask "
-             "and that data.py's inversion still applies")
+        print("  convention            separate disc/cup soft maps; consensus >=191")
 
 
 # --------------------------------------------------------------------------
@@ -305,7 +357,7 @@ def check_disk(out_parent: Path) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", default=DEFAULT_CONFIG, type=Path)
-    ap.add_argument("--out-parent", default=Path("artifacts/runs"), type=Path,
+    ap.add_argument("--out-parent", default=DEFAULT_OUT_PARENT, type=Path,
                     help="where checkpoints will be written, for the free-space check")
     ap.add_argument("--skip-amp", action="store_true",
                     help="skip the AMP numerics probe")
@@ -317,10 +369,10 @@ def main() -> int:
     results: dict[str, bool] = {}
     results["torch/cuda"] = check_torch()
 
-    data_ok, root = check_data(args.config)
+    data_ok, root, dataset, records = check_data(args.config)
     results["data_root"] = data_ok
-    if root is not None:
-        check_mask_values(root)
+    if root is not None and dataset is not None:
+        check_mask_values(root, dataset, records)
 
     if args.skip_amp or not results["torch/cuda"]:
         print("\n=== AMP probe skipped " + "=" * 40)

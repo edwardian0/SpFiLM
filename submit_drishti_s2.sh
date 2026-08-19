@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=refuge_s2
+#SBATCH --job-name=drishti_s2
 #SBATCH --partition=interruptible_gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=9
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
-#SBATCH --time=0-06:00:00
-#SBATCH --output=/users/k23123868/edward/logs/refuge_s2_%j.out
-#SBATCH --error=/users/k23123868/edward/logs/refuge_s2_%j.err
+#SBATCH --time=0-00:30:00
+#SBATCH --output=/users/k23123868/edward/logs/drishti_s2_%j.out
+#SBATCH --error=/users/k23123868/edward/logs/drishti_s2_%j.err
 #SBATCH --exclude=erc-hpc-comp[048,054,170-175,177,178,196]
 #
 # Step 2 in-domain baseline: plain U-Net on refuge_zeiss, full image, 512px.
@@ -20,8 +20,8 @@
 set -euo pipefail
 
 CODE_ROOT="/users/k23123868/edward/spfilm"
-# CONFIG="$CODE_ROOT/configs/stage2_refuge_create.json"
-OUT_DIR="$CODE_ROOT/artifacts/runs/refuge_s2_${SLURM_JOB_ID}"
+CONFIG="$CODE_ROOT/configs/stage2_drishti_create.json"
+OUT_DIR="$CODE_ROOT/artifacts/runs/drishti_s2_${SLURM_JOB_ID}"
 
 mkdir -p /users/k23123868/edward/logs "$OUT_DIR"
 

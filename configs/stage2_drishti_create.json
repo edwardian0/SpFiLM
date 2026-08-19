@@ -1,6 +1,6 @@
 {
-  "experiment_name": "stage2_refuge_plain_unet",
-  "dataset": "refuge",
+  "experiment_name": "stage2_drishti_plain_unet",
+  "dataset": "drishti",
   "data_root": "/scratch/prj/bc_ca_segmentation_in_tb_anatomy/glaucoma_datasets/DRISHTI-GS",
   "output_dir": "artifacts/stage2_drishti",
   "seed": 42,
