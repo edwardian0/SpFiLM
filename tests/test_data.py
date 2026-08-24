@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -16,6 +17,7 @@ from spfilm.data import (  # noqa: E402
     DatasetLayoutError,
     FundusRecord,
     decode_mask_channels,
+    load_rim_one_dl_split_manifest,
     provider_partition,
     stratified_partition,
 )
@@ -83,6 +85,65 @@ class MaskDecodingTests(unittest.TestCase):
             with self.assertRaises(DatasetLayoutError):
                 decode_mask_channels(record)
 
+    def test_rim_one_dl_repairs_only_the_pinned_source_defect(self) -> None:
+        disc = np.zeros((4, 4), dtype=np.uint8)
+        disc[0, 0] = 255
+        cup = np.zeros((4, 4), dtype=np.uint8)
+        cup[0, :4] = 255
+        cup[1, :4] = 255  # one contained pixel and seven outside pixels
+        with tempfile.TemporaryDirectory() as directory:
+            directory_path = Path(directory)
+            disc_path = directory_path / "disc.png"
+            cup_path = directory_path / "cup.png"
+            Image.fromarray(disc).save(disc_path)
+            Image.fromarray(cup).save(cup_path)
+            record = FundusRecord(
+                sample_id="r2_Im357",
+                domain="rim_one_dl",
+                image_path=directory_path / "unused.png",
+                disc_mask_path=disc_path,
+                cup_mask_path=cup_path,
+                mask_encoding="rim_one_dl_foreground_high",
+                source_cup_repair_pixels=7,
+            )
+            masks = decode_mask_channels(record)
+        self.assertEqual(int(masks[0].sum()), 1)
+        self.assertEqual(int(masks[1].sum()), 1)
+        self.assertTrue(np.all(masks[1] <= masks[0]))
+
+
+class RimOneManifestTests(unittest.TestCase):
+    def test_manifest_maps_all_485_discovered_stems_exactly_once(self) -> None:
+        records = [
+            FundusRecord(
+                sample_id=f"sample_{index:03d}",
+                domain="rim_one_dl",
+                image_path=Path(f"/sample_{index:03d}.png"),
+                mask_encoding="unused",
+                release_prefix=f"r{index % 3 + 1}",
+            )
+            for index in range(485)
+        ]
+        payload = {
+            "schema_version": 1,
+            "dataset": "rim_one_dl",
+            "partitions": {
+                "train": [record.sample_id for record in records[:340]],
+                "val": [record.sample_id for record in records[340:388]],
+                "test": [record.sample_id for record in records[388:]],
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "rim_one_dl.json"
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+            splits = load_rim_one_dl_split_manifest(records, manifest_path)
+        self.assertEqual(
+            {name: len(rows) for name, rows in splits.items()},
+            {"train": 340, "val": 48, "test": 97},
+        )
+        listed = [record.sample_id for rows in splits.values() for record in rows]
+        self.assertEqual(len(listed), len(set(listed)))
+
 
 class SplitTests(unittest.TestCase):
     @staticmethod
@@ -135,4 +196,3 @@ class SplitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -20,10 +20,13 @@ from .data import (
     audit_records,
     discover_drishti,
     discover_refuge_training,
+    discover_rim_one_dl,
+    load_rim_one_dl_split_manifest,
     load_rim_one_r3_manifest,
     provider_partition,
     seed_worker,
     stratified_partition,
+    validate_splits,
 )
 from .losses import BCEDiceLoss
 from .metrics import (
@@ -127,6 +130,8 @@ def discover_config_records(
         return discover_refuge_training(data_root)
     if config.dataset == "drishti":
         return discover_drishti(data_root)
+    if config.dataset == "rim_one_dl":
+        return discover_rim_one_dl(data_root)
     if config.dataset == "rim_one_r3":
         if config.rim_manifest is None:
             raise ValueError(
@@ -139,7 +144,9 @@ def discover_config_records(
 
 
 def build_splits(
-    config: Stage2Config, records: list[FundusRecord]
+    config: Stage2Config,
+    records: list[FundusRecord],
+    project_root: str | Path | None = None,
 ) -> dict[str, list[FundusRecord]]:
     if config.dataset == "refuge":
         return stratified_partition(
@@ -148,6 +155,13 @@ def build_splits(
             test_fraction=config.test_fraction,
             val_fraction_of_remaining=config.val_fraction,
         )
+    if config.dataset == "rim_one_dl":
+        if config.rim_manifest is None:
+            raise ValueError("rim_one_dl requires a committed rim_manifest split")
+        if project_root is None:
+            raise ValueError("rim_one_dl split resolution requires project_root")
+        manifest_path = _resolve(Path(project_root).resolve(), config.rim_manifest)
+        return load_rim_one_dl_split_manifest(records, manifest_path)
     return provider_partition(records, seed=config.seed, val_fraction=config.val_fraction)
 
 
@@ -313,6 +327,70 @@ def evaluate(
     return metrics
 
 
+RIM_ONE_DL_PER_IMAGE_CONTEXT = (
+    "release_prefix",
+    "hospital_split",
+    "diagnosis_class",
+    "native_width",
+    "native_height",
+    "letterbox_scale",
+)
+
+
+def _append_rim_one_dl_per_image_context(
+    csv_path: str | Path,
+    records: Sequence[FundusRecord],
+    image_size: int,
+) -> Path:
+    """Add RIM-only provenance and native-to-letterbox scale to metric rows."""
+
+    csv_path = Path(csv_path)
+    record_by_id = {record.sample_id: record for record in records}
+    if len(record_by_id) != len(records):
+        raise ValueError("Cannot annotate metrics for duplicate RIM-ONE-DL IDs")
+    with csv_path.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        fieldnames = list(reader.fieldnames or ())
+        rows = list(reader)
+    if not fieldnames or any(field in fieldnames for field in RIM_ONE_DL_PER_IMAGE_CONTEXT):
+        raise ValueError(f"Unexpected per-image metric schema in {csv_path}")
+
+    for row in rows:
+        sample_id = row["image_id"]
+        try:
+            record = record_by_id[sample_id]
+        except KeyError:
+            raise ValueError(
+                f"Per-image metric row {sample_id!r} has no RIM-ONE-DL record"
+            ) from None
+        if (
+            record.release_prefix is None
+            or record.hospital_split is None
+            or record.diagnosis_class is None
+            or record.native_size is None
+        ):
+            raise ValueError(f"RIM-ONE-DL record {sample_id!r} lacks metric context")
+        row.update(
+            {
+                "release_prefix": record.release_prefix,
+                "hospital_split": record.hospital_split,
+                "diagnosis_class": record.diagnosis_class,
+                "native_width": record.native_size[0],
+                "native_height": record.native_size[1],
+                "letterbox_scale": f"{image_size / max(record.native_size):.12g}",
+            }
+        )
+
+    output_fieldnames = [fieldnames[0], *RIM_ONE_DL_PER_IMAGE_CONTEXT, *fieldnames[1:]]
+    temporary_path = csv_path.with_name(f".{csv_path.name}.tmp")
+    with temporary_path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=output_fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    temporary_path.replace(csv_path)
+    return csv_path
+
+
 def _write_history(history: list[dict[str, float]], output_path: Path) -> None:
     with output_path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=history[0].keys())
@@ -325,6 +403,7 @@ def run_experiment(
     project_root: str | Path,
     smoke: bool = False,
     records: Sequence[FundusRecord] | None = None,
+    split_records: dict[str, list[FundusRecord]] | None = None,
     epoch_callback: Callable[[dict[str, float], bool], None] | None = None,
 ) -> dict[str, Any]:
     """Audit, split, train, and evaluate the Stage 2 single-domain baseline.
@@ -359,14 +438,26 @@ def run_experiment(
         else list(records)
     )
     audit = audit_records(records)
-    splits = build_splits(config, records)
+    if split_records is None:
+        splits = build_splits(config, records, project_root)
+    else:
+        splits = {
+            name: list(split_records[name]) for name in ("train", "val", "test")
+        }
+        validate_splits(splits, records)
     split_counts = {name: len(values) for name, values in splits.items()}
 
     audit["split_counts"] = split_counts
-    audit["split_policy"] = (
-        "deterministic stratified split inside REFUGE Training400 only"
-        if config.dataset == "refuge"
-        else "provider test locked; validation stratified from provider train"
+    split_policies = {
+        "refuge": "deterministic stratified split inside REFUGE Training400 only",
+        "rim_one_dl": (
+            "committed 340/48/97 stem manifest, jointly stratified by release "
+            "prefix and glaucoma/normal class"
+        ),
+    }
+    audit["split_policy"] = split_policies.get(
+        config.dataset,
+        "provider test locked; validation stratified from provider train",
     )
     (output_dir / "data_audit.json").write_text(
         json.dumps(audit, indent=2), encoding="utf-8"
@@ -487,6 +578,76 @@ def run_experiment(
         max_batches=max_batches,
         per_image_csv=output_dir / "test_per_image_metrics.csv",
     )
+    secondary_hospital_metrics: dict[str, Any] | None = None
+    if config.dataset == "rim_one_dl":
+        _append_rim_one_dl_per_image_context(
+            output_dir / "test_per_image_metrics.csv",
+            splits["test"],
+            config.image_size,
+        )
+        rim_metric_frame = (
+            f"metrics computed on the {config.image_size}px full-source-image grid; "
+            "each square ONH-cropped source is resized to "
+            f"{config.image_size}x{config.image_size}, and the per-image native-to-grid "
+            "letterbox_scale is recorded in the metrics CSV; HD95 remains in grid "
+            "pixels, not millimetres or native pixels"
+        )
+        test_metrics["metric_frame"] = rim_metric_frame
+        test_metrics["per_image_context_fields"] = list(
+            RIM_ONE_DL_PER_IMAGE_CONTEXT
+        )
+
+        hospital_test_records = [
+            record for record in records if record.hospital_split == "test_set"
+        ]
+        if not hospital_test_records:
+            raise RuntimeError(
+                "RIM-ONE-DL secondary hospital evaluation has no test_set records"
+            )
+        hospital_dataset = _make_dataset(
+            hospital_test_records, config, augment=False
+        )
+        hospital_loader = _make_loader(
+            hospital_dataset,
+            config,
+            device,
+            False,
+            torch.Generator().manual_seed(config.seed),
+        )
+        secondary_hospital_metrics = evaluate(
+            model,
+            hospital_loader,
+            criterion,
+            device,
+            threshold=config.threshold,
+            max_batches=max_batches,
+            per_image_csv=output_dir / "hospital_test_per_image_metrics.csv",
+        )
+        _append_rim_one_dl_per_image_context(
+            output_dir / "hospital_test_per_image_metrics.csv",
+            hospital_test_records,
+            config.image_size,
+        )
+        hospital_ids = {record.sample_id for record in hospital_test_records}
+        secondary_hospital_metrics.update(
+            {
+                "metric_frame": rim_metric_frame,
+                "per_image_context_fields": list(RIM_ONE_DL_PER_IMAGE_CONTEXT),
+                "source_partition": "partitioned_by_hospital/test_set",
+                "primary_split_overlap": {
+                    split: len(
+                        hospital_ids
+                        & {record.sample_id for record in split_records}
+                    )
+                    for split, split_records in splits.items()
+                },
+                "interpretation": (
+                    "secondary descriptive provider-partition result only; the "
+                    "primary manifest samples across all 485 images, so this set "
+                    "overlaps primary train/val/test and is not an independent holdout"
+                ),
+            }
+        )
     save_training_curves(history, output_dir / "training_curves.png")
     save_prediction_gallery(
         model,
@@ -528,6 +689,11 @@ def run_experiment(
             "test_predictions": str(output_dir / "test_predictions.png"),
         },
     }
+    if secondary_hospital_metrics is not None:
+        report["secondary_hospital_partition"] = secondary_hospital_metrics
+        report["artifacts"]["hospital_test_per_image_metrics"] = str(
+            output_dir / "hospital_test_per_image_metrics.csv"
+        )
     (output_dir / "test_metrics.json").write_text(
         json.dumps(report, indent=2), encoding="utf-8"
     )
@@ -535,6 +701,13 @@ def run_experiment(
         json.dumps(asdict(config), indent=2), encoding="utf-8"
     )
     _print_test_results(test_metrics, config.image_size)
+    if secondary_hospital_metrics is not None:
+        print(
+            "secondary RIM-ONE-DL hospital partition "
+            "(reported separately; not an independent holdout)",
+            flush=True,
+        )
+        _print_test_results(secondary_hospital_metrics, config.image_size)
     return report
 
 
