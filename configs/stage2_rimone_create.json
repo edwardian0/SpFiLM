@@ -1,7 +1,7 @@
 {
   "experiment_name": "stage2_rim_one_dl_plain_unet",
   "dataset": "rim_one_dl",
-  "data_root": "~/datasets/glaucoma_datasets",
+  "data_root": "/scratch/prj/bc_ca_segmentation_in_tb_anatomy/datasets/",
   "output_dir": "artifacts/stage2_rim_one_dl",
   "rim_manifest": "splits/rim_one_dl.json",
   "seed": 42,

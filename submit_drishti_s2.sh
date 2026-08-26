@@ -13,7 +13,7 @@
 #
 # Step 2 in-domain baseline: plain U-Net on refuge_zeiss, full image, 512px.
 # Submit: sbatch /users/k23123868/edward/spfilm/submit_refuge_s2.sh
-# Smoke: sbatch --time=0-00:20:00 /users/k23123868/edward/spfilm/submit_refuge_s2.sh --smoke
+# Smoke: sbatch --time=0-00:20:00 /users/k23123868/edward/spfilm/submit_drishti_s2.sh --smoke
 # NOT resumable — no --requeue, no SIGUSR1. If preempted, the job dies
 # visibly and must be resubmitted from scratch.
 
@@ -39,6 +39,6 @@ echo "git commit: $(git rev-parse HEAD)"
 git diff --quiet || echo "WARNING: working tree is dirty"
 nvidia-smi -L
 
-python -u run_refuge_s2.py --config "$CONFIG" --out-dir "$OUT_DIR" --seed 42 "$@"
+python -u run_stage_s2.py --config "$CONFIG" --out-dir "$OUT_DIR" --seed 42 "$@"
 
 echo "[$(date -u +%FT%TZ)] refuge_s2 finished"

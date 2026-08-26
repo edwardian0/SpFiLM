@@ -39,6 +39,6 @@ echo "git commit: $(git rev-parse HEAD)"
 git diff --quiet || echo "WARNING: working tree is dirty"
 nvidia-smi -L
 
-python -u run_refuge_s2.py --config "$CONFIG" --out-dir "$OUT_DIR" --seed 42 "$@"
+python -u run_stage_s2.py --config "$CONFIG" --out-dir "$OUT_DIR" --seed 42 "$@"
 
 echo "[$(date -u +%FT%TZ)] refuge_s2 finished"

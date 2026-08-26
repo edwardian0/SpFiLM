@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from .data import (
     FundusRecord,
@@ -511,8 +512,9 @@ def run_experiment(
     optimizer = torch.optim.Adam(
         model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
     )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    scheduler = ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=3, min_lr=1e-6
+        # Can adjust patience (by increasing) and increas the factor to increas the time taken
     )
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
