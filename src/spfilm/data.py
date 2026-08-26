@@ -22,6 +22,11 @@ RIM_ONE_DL_IMAGE_COUNT = 485
 RIM_ONE_DL_MASK_COUNT = 970
 RIM_ONE_DL_SPLIT_COUNTS = {"train": 340, "val": 48, "test": 97}
 RIM_ONE_DL_RELEASE_COUNTS = {"r1": 98, "r2": 250, "r3": 137}
+RIM_ONE_DL_MANIFEST_SCHEMA_VERSION = 2
+RIM_ONE_DL_FELLOW_EYE_CAVEAT = (
+    "r3 filenames encode eye but not patient, so fellow-eye correlation is "
+    "undetectable from filenames rather than known to be absent"
+)
 RIM_ONE_DL_HOSPITAL_RELEASE_COUNTS = {
     ("test_set", "r1"): 98,
     ("test_set", "r2"): 76,
@@ -303,9 +308,24 @@ def discover_rim_one_dl(root: str | Path) -> list[FundusRecord]:
             f"Expected all RIM-ONE-DL mask suffixes to be T, found {dict(suffixes)}"
         )
 
+    mask_locations: dict[tuple[str, str], list[Path]] = {}
+    for (diagnosis_class, stem, kind), path in mask_map.items():
+        mask_locations.setdefault((stem, kind), []).append(path)
+    ambiguous_masks = {
+        key: sorted(str(path) for path in paths)
+        for key, paths in mask_locations.items()
+        if len({path.parent.name for path in paths}) > 1
+    }
+    if ambiguous_masks:
+        raise DatasetLayoutError(
+            "RIM-ONE-DL mask stems resolve in both diagnosis class folders: "
+            f"{ambiguous_masks}"
+        )
+
     records: list[FundusRecord] = []
     used_masks: set[tuple[str, str, str]] = set()
     seen_stems: dict[str, Path] = {}
+    r3_case_ids: dict[str, Path] = {}
     release_counts: Counter[str] = Counter()
     hospital_release_counts: Counter[tuple[str, str]] = Counter()
     source_repairs: dict[str, int] = {}
@@ -319,12 +339,34 @@ def discover_rim_one_dl(root: str | Path) -> list[FundusRecord]:
                 f"{seen_stems[stem]} and {image_path}"
             )
         seen_stems[stem] = image_path
+        if "right_half" in stem.lower():
+            raise DatasetLayoutError(
+                "RIM-ONE-DL unexpectedly contains a right-half image, so the "
+                f"image-level split may no longer be safe: {image_path}"
+            )
         release_match = re.match(r"^(r[123])_", stem)
         if release_match is None:
             raise DatasetLayoutError(
                 f"Unparseable RIM-ONE-DL release prefix in image {image_path}"
             )
         release_prefix = release_match.group(1)
+        if release_prefix == "r3":
+            r3_match = re.fullmatch(
+                r"(?P<case_id>r3_[A-Za-z]+-\d+)-(?P<eye>[LR])_left_half",
+                stem,
+            )
+            if r3_match is None:
+                raise DatasetLayoutError(
+                    f"Unparseable RIM-ONE-DL r3 eye/case stem: {image_path}"
+                )
+            case_id = r3_match.group("case_id")
+            if case_id in r3_case_ids:
+                raise DatasetLayoutError(
+                    "RIM-ONE-DL r3 case identifier appears more than once, so "
+                    f"image-level splitting is unsafe: {r3_case_ids[case_id]} and "
+                    f"{image_path}"
+                )
+            r3_case_ids[case_id] = image_path
         release_counts[release_prefix] += 1
         hospital_release_counts[(hospital_split, release_prefix)] += 1
 
@@ -333,6 +375,18 @@ def discover_rim_one_dl(root: str | Path) -> list[FundusRecord]:
         }
         missing_kinds = [kind for kind, key in keys.items() if key not in mask_map]
         if missing_kinds:
+            other_class = "normal" if diagnosis_class == "glaucoma" else "glaucoma"
+            misplaced = {
+                kind: str(mask_map[(other_class, stem, kind)])
+                for kind in missing_kinds
+                if (other_class, stem, kind) in mask_map
+            }
+            if misplaced:
+                raise DatasetLayoutError(
+                    "RIM-ONE-DL image/mask class-folder disagreement for "
+                    f"{image_path}: image_class={diagnosis_class!r}, "
+                    f"misplaced_masks={misplaced}"
+                )
             raise DatasetLayoutError(
                 f"RIM-ONE-DL image {image_path} is missing masks: {missing_kinds}"
             )
@@ -410,6 +464,31 @@ def discover_rim_one_dl(root: str | Path) -> list[FundusRecord]:
     return sorted(records, key=lambda record: record.sample_id)
 
 
+def rim_one_dl_release_class_table(
+    records: Sequence[FundusRecord],
+) -> dict[str, dict[str, int]]:
+    """Return the manifest provenance table, failing on incomplete metadata."""
+
+    releases = sorted({record.release_prefix for record in records}, key=str)
+    diagnoses = sorted({record.diagnosis_class for record in records}, key=str)
+    if releases != ["r1", "r2", "r3"] or diagnoses != ["glaucoma", "normal"]:
+        raise DatasetLayoutError(
+            "RIM-ONE-DL records need complete r1/r2/r3 and glaucoma/normal "
+            f"metadata, found releases={releases}, diagnoses={diagnoses}"
+        )
+    return {
+        release: {
+            diagnosis: sum(
+                record.release_prefix == release
+                and record.diagnosis_class == diagnosis
+                for record in records
+            )
+            for diagnosis in diagnoses
+        }
+        for release in releases
+    }
+
+
 def load_rim_one_dl_split_manifest(
     records: Sequence[FundusRecord], manifest_path: str | Path
 ) -> dict[str, list[FundusRecord]]:
@@ -426,10 +505,89 @@ def load_rim_one_dl_split_manifest(
         raise DatasetLayoutError(
             f"Cannot read RIM-ONE-DL split manifest {manifest_path}: {error}"
         ) from error
-    if payload.get("schema_version") != 1 or payload.get("dataset") != "rim_one_dl":
+    if (
+        payload.get("schema_version") != RIM_ONE_DL_MANIFEST_SCHEMA_VERSION
+        or payload.get("dataset") != "rim_one_dl"
+    ):
         raise DatasetLayoutError(
-            "RIM-ONE-DL split manifest must have schema_version=1 and "
+            "RIM-ONE-DL split manifest must have "
+            f"schema_version={RIM_ONE_DL_MANIFEST_SCHEMA_VERSION} and "
             f"dataset='rim_one_dl': {manifest_path}"
+        )
+    if payload.get("source_record_count") != len(records):
+        raise DatasetLayoutError(
+            "RIM-ONE-DL manifest source_record_count does not match discovery: "
+            f"manifest={payload.get('source_record_count')!r}, discovered={len(records)}"
+        )
+    provenance = payload.get("provenance")
+    if not isinstance(provenance, dict):
+        raise DatasetLayoutError(
+            "RIM-ONE-DL split manifest is missing its provenance object"
+        )
+    required_provenance = {
+        "generator_script",
+        "git_commit",
+        "working_tree_dirty",
+        "seed",
+        "generation_date_utc",
+        "release_class_table",
+        "release_only_fallback_releases",
+        "fellow_eye_caveat",
+    }
+    missing_provenance = required_provenance - set(provenance)
+    if missing_provenance:
+        raise DatasetLayoutError(
+            "RIM-ONE-DL manifest provenance is missing fields: "
+            f"{sorted(missing_provenance)}"
+        )
+    if provenance["generator_script"] != "generate_rim_one_dl_split.py":
+        raise DatasetLayoutError(
+            "RIM-ONE-DL manifest generator_script must be "
+            "'generate_rim_one_dl_split.py'"
+        )
+    if not isinstance(provenance["git_commit"], str) or re.fullmatch(
+        r"[0-9a-f]{40}", provenance["git_commit"]
+    ) is None:
+        raise DatasetLayoutError(
+            "RIM-ONE-DL manifest provenance git_commit must be a full SHA-1"
+        )
+    if not isinstance(provenance["working_tree_dirty"], bool):
+        raise DatasetLayoutError(
+            "RIM-ONE-DL manifest provenance working_tree_dirty must be boolean"
+        )
+    if provenance["seed"] != payload.get("seed") or not isinstance(
+        provenance["seed"], int
+    ):
+        raise DatasetLayoutError(
+            "RIM-ONE-DL manifest provenance seed must be an integer matching "
+            "the top-level seed"
+        )
+    if not isinstance(provenance["generation_date_utc"], str) or re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}", provenance["generation_date_utc"]
+    ) is None:
+        raise DatasetLayoutError(
+            "RIM-ONE-DL manifest generation_date_utc must be YYYY-MM-DD"
+        )
+    expected_table = rim_one_dl_release_class_table(records)
+    if provenance["release_class_table"] != expected_table:
+        raise DatasetLayoutError(
+            "RIM-ONE-DL manifest release/class provenance changed: "
+            f"manifest={provenance['release_class_table']}, discovered={expected_table}"
+        )
+    expected_fallbacks = sorted(
+        release
+        for release, classes in expected_table.items()
+        if any(count < 3 for count in classes.values())
+    )
+    if provenance["release_only_fallback_releases"] != expected_fallbacks:
+        raise DatasetLayoutError(
+            "RIM-ONE-DL manifest release-only fallbacks disagree with the "
+            f"release/class table: manifest={provenance['release_only_fallback_releases']}, "
+            f"expected={expected_fallbacks}"
+        )
+    if provenance["fellow_eye_caveat"] != RIM_ONE_DL_FELLOW_EYE_CAVEAT:
+        raise DatasetLayoutError(
+            "RIM-ONE-DL manifest must preserve the exact fellow-eye caveat"
         )
     partitions = payload.get("partitions")
     if not isinstance(partitions, dict) or set(partitions) != set(

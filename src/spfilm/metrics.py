@@ -147,6 +147,7 @@ class OverlapAccumulator:
         logits: torch.Tensor,
         targets: torch.Tensor,
         image_ids: Sequence[str] | None = None,
+        hd95_multipliers: Sequence[float] | None = None,
     ) -> None:
         # Thresholded masks move to the CPU once: HD95 needs numpy arrays anyway,
         # and per_image_overlap accumulates in float64, which MPS cannot hold.
@@ -170,6 +171,18 @@ class OverlapAccumulator:
             raise ValueError(
                 f"Got {len(image_ids)} image ids for {dice.shape[0]} images"
             )
+        if hd95_multipliers is None:
+            hd95_multipliers = [1.0] * dice.shape[0]
+        if len(hd95_multipliers) != dice.shape[0]:
+            raise ValueError(
+                f"Got {len(hd95_multipliers)} HD95 multipliers for "
+                f"{dice.shape[0]} images"
+            )
+        if any(
+            not math.isfinite(float(multiplier)) or float(multiplier) <= 0
+            for multiplier in hd95_multipliers
+        ):
+            raise ValueError("HD95 multipliers must be finite and positive")
         for index, image_id in enumerate(image_ids):
             for channel, name in enumerate(CHANNEL_NAMES):
                 pixels = int(prediction_masks[index, channel].size)
@@ -185,7 +198,8 @@ class OverlapAccumulator:
                         "hd95": hd95(
                             prediction_masks[index, channel],
                             target_masks[index, channel],
-                        ),
+                        )
+                        * float(hd95_multipliers[index]),
                         "acc": correct / pixels,
                         "tp": int(true_positive[index, channel]),
                         "fp": int(false_positive[index, channel]),
@@ -272,4 +286,3 @@ def summarise_per_image_csv(
     """Summarise straight from the written CSV so the report and the file agree."""
 
     return summarise_per_image_rows(read_per_image_csv(csv_path))
-

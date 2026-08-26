@@ -280,23 +280,10 @@ def select_manifest_smoke_splits(
 ) -> dict[str, list[FundusRecord]]:
     """Take 2/1/1 records without discarding committed split membership."""
 
-    train = sorted(splits["train"], key=lambda record: record.sample_id)[:2]
-
-    def one_with_hospital_test(name: str) -> FundusRecord:
-        candidates = sorted(splits[name], key=lambda record: record.sample_id)
-        return next(
-            (
-                record
-                for record in candidates
-                if record.hospital_split == "test_set"
-            ),
-            candidates[0],
-        )
-
     return {
-        "train": train,
-        "val": [one_with_hospital_test("val")],
-        "test": [one_with_hospital_test("test")],
+        "train": sorted(splits["train"], key=lambda record: record.sample_id)[:2],
+        "val": sorted(splits["val"], key=lambda record: record.sample_id)[:1],
+        "test": sorted(splits["test"], key=lambda record: record.sample_id)[:1],
     }
 
 
@@ -521,7 +508,10 @@ def format_final_block(report: dict[str, Any], config: Stage2Config) -> str:
     lines.append("reporting rule    " + report["reporting_rule"])
     lines.append("")
 
-    columns = ("Dice", "IoU", "HD95 (px)", "Accuracy")
+    hd95_label = (
+        "HD95 (native px)" if config.dataset == "rim_one_dl" else "HD95 (px)"
+    )
+    columns = ("Dice", "IoU", hd95_label, "Accuracy")
     widths = (26, 26, 34, 26)
     head = f"{'structure':<10}" + "".join(
         f"{name:<{width}}" for name, width in zip(columns, widths)
@@ -544,43 +534,6 @@ def format_final_block(report: dict[str, Any], config: Stage2Config) -> str:
     lines.append("-" * len(head))
     lines.append("mean ± std over per-image values; disc and cup are never averaged together")
     lines.append(f"per-image source  {test['per_image_csv']}")
-    secondary = report.get("secondary_hospital_partition")
-    if secondary is not None:
-        lines.append("")
-        lines.append("=" * 96)
-        lines.append("SECONDARY RIM-ONE-DL HOSPITAL-PARTITION RESULT")
-        lines.append("=" * 96)
-        lines.append(f"source partition  {secondary['source_partition']}")
-        lines.append(f"primary overlap   {secondary['primary_split_overlap']}")
-        lines.append(f"interpretation    {secondary['interpretation']}")
-        lines.append(f"metric frame      {secondary['metric_frame']}")
-        lines.append("")
-        lines.append(head)
-        lines.append("-" * len(head))
-        for name in CHANNEL_NAMES:
-            structure = secondary[name]
-            count = int(structure["sample_count"])
-            cells = (
-                _cell(structure["dice_mean"], structure["dice_std"], count),
-                _cell(structure["iou_mean"], structure["iou_std"], count),
-                _hd95_cell(structure),
-                _cell(
-                    structure["accuracy_mean"],
-                    structure["accuracy_std"],
-                    count,
-                ),
-            )
-            lines.append(
-                f"{name:<10}"
-                + "".join(
-                    f"{cell:<{width}}" for cell, width in zip(cells, widths)
-                )
-            )
-        lines.append("-" * len(head))
-        lines.append(
-            "secondary result is reported separately; disc and cup remain separate"
-        )
-        lines.append(f"per-image source  {secondary['per_image_csv']}")
     lines.append("")
     lines.append(f"known deviation   {DEEP_SUPERVISION_NOTE}")
     lines.append("=" * 96)
@@ -602,15 +555,6 @@ def write_run_notes(run_dir: Path, config: Stage2Config, report: dict[str, Any])
                 f"- Device: {report['device']}; seed {config.seed}; "
                 f"{config.image_size}px letterbox canvas.",
                 f"- Splits: {report['split_counts']}.",
-                *(
-                    (
-                        "- Secondary hospital-partition evaluation is reported "
-                        "separately and is descriptive only because it overlaps "
-                        "the primary train/validation/test manifest.",
-                    )
-                    if report.get("secondary_hospital_partition") is not None
-                    else ()
-                ),
                 "",
                 "## Known deviations",
                 "",

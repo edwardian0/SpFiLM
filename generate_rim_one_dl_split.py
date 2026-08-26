@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import subprocess
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -16,10 +18,13 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from spfilm.data import (  # noqa: E402
     FundusRecord,
+    RIM_ONE_DL_FELLOW_EYE_CAVEAT,
     RIM_ONE_DL_IMAGE_COUNT,
+    RIM_ONE_DL_MANIFEST_SCHEMA_VERSION,
     RIM_ONE_DL_SPLIT_COUNTS,
     discover_rim_one_dl,
     load_rim_one_dl_split_manifest,
+    rim_one_dl_release_class_table,
 )
 
 
@@ -50,14 +55,31 @@ def _largest_remainder(
 
 def build_partitions(
     records: list[FundusRecord], seed: int
-) -> dict[str, list[str]]:
+) -> tuple[dict[str, list[str]], list[str]]:
     if len(records) != RIM_ONE_DL_IMAGE_COUNT:
         raise ValueError(
             f"Expected {RIM_ONE_DL_IMAGE_COUNT} records, found {len(records)}"
         )
+    release_class_table = rim_one_dl_release_class_table(records)
+    fallback_releases = sorted(
+        release
+        for release, classes in release_class_table.items()
+        if any(count < 3 for count in classes.values())
+    )
     grouped: dict[str, list[FundusRecord]] = {}
     for record in records:
-        grouped.setdefault(record.stratum, []).append(record)
+        if record.release_prefix is None or record.diagnosis_class is None:
+            raise ValueError(f"Incomplete split metadata for {record.sample_id}")
+        if record.release_prefix in fallback_releases:
+            stratum = record.release_prefix
+        else:
+            stratum = f"{record.release_prefix}_{record.diagnosis_class}"
+            if record.stratum != stratum:
+                raise ValueError(
+                    f"Unexpected stratum for {record.sample_id}: "
+                    f"record={record.stratum!r}, expected={stratum!r}"
+                )
+        grouped.setdefault(stratum, []).append(record)
     group_sizes = {stratum: len(rows) for stratum, rows in grouped.items()}
     test_counts = _largest_remainder(
         group_sizes, RIM_ONE_DL_SPLIT_COUNTS["test"]
@@ -92,7 +114,58 @@ def build_partitions(
         raise AssertionError(
             f"Generator produced {actual}, expected {RIM_ONE_DL_SPLIT_COUNTS}"
         )
-    return partitions
+    releases = sorted(release_class_table)
+    for split, stems in partitions.items():
+        stem_set = set(stems)
+        split_records = [
+            record for record in records if record.sample_id in stem_set
+        ]
+        present_releases = sorted(
+            {record.release_prefix for record in split_records}, key=str
+        )
+        if present_releases != releases:
+            raise AssertionError(
+                f"{split} does not contain every release: {present_releases}"
+            )
+        for release in releases:
+            if release in fallback_releases:
+                continue
+            present_classes = {
+                record.diagnosis_class
+                for record in split_records
+                if record.release_prefix == release
+            }
+            if present_classes != {"glaucoma", "normal"}:
+                raise AssertionError(
+                    f"{split}/{release} does not contain both classes: "
+                    f"{sorted(present_classes, key=str)}"
+                )
+    return partitions, fallback_releases
+
+
+def git_state() -> tuple[str, bool]:
+    """Return the exact tracked commit and whether generation was dirty."""
+
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=PROJECT_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=PROJECT_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(f"Cannot record manifest git provenance: {error}") from error
+    if len(commit) != 40:
+        raise RuntimeError(f"Expected a full git commit SHA, found {commit!r}")
+    return commit, bool(status.strip())
 
 
 def partition_distribution(
@@ -145,14 +218,21 @@ def main() -> int:
         )
 
     records = discover_rim_one_dl(args.data_root)
-    partitions = build_partitions(records, seed=args.seed)
+    release_class_table = rim_one_dl_release_class_table(records)
+    print(
+        "release_x_class="
+        f"{json.dumps(release_class_table, sort_keys=True)}",
+        flush=True,
+    )
+    partitions, fallback_releases = build_partitions(records, seed=args.seed)
     record_by_id = {record.sample_id: record for record in records}
     distributions = {
         split: partition_distribution(stems, record_by_id)
         for split, stems in partitions.items()
     }
+    commit, working_tree_dirty = git_state()
     payload = {
-        "schema_version": 1,
+        "schema_version": RIM_ONE_DL_MANIFEST_SCHEMA_VERSION,
         "dataset": "rim_one_dl",
         "seed": args.seed,
         "policy": (
@@ -160,6 +240,16 @@ def main() -> int:
             "jointly stratified by release prefix and glaucoma/normal class"
         ),
         "source_record_count": len(records),
+        "provenance": {
+            "generator_script": str(Path(__file__).resolve().relative_to(PROJECT_ROOT)),
+            "git_commit": commit,
+            "working_tree_dirty": working_tree_dirty,
+            "seed": args.seed,
+            "generation_date_utc": datetime.now(timezone.utc).date().isoformat(),
+            "release_class_table": release_class_table,
+            "release_only_fallback_releases": fallback_releases,
+            "fellow_eye_caveat": RIM_ONE_DL_FELLOW_EYE_CAVEAT,
+        },
         "partition_distributions": distributions,
         "partitions": partitions,
     }
@@ -169,6 +259,7 @@ def main() -> int:
 
     print(f"manifest={output_path}")
     print(f"seed={args.seed}")
+    print(f"release_only_fallback_releases={fallback_releases}")
     for split in ("train", "val", "test"):
         print(f"{split}={json.dumps(distributions[split], sort_keys=True)}")
     return 0

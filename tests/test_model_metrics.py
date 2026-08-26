@@ -86,6 +86,31 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(set(metrics), {"disc", "cup"})
         self.assertNotIn("average", metrics)
 
+    def test_per_image_hd95_multiplier_converts_grid_to_native_pixels(self) -> None:
+        target = np.stack([_square(4, 4), _square(4, 4)])[None]
+        prediction = np.stack([_square(4, 8), _square(4, 8)])[None]
+        logits = torch.where(torch.from_numpy(prediction), 20.0, -20.0)
+        accumulator = OverlapAccumulator()
+        accumulator.update(
+            logits,
+            torch.from_numpy(target).float(),
+            image_ids=["native-scale-probe"],
+            hd95_multipliers=[0.5],
+        )
+        metrics = accumulator.compute()
+        self.assertAlmostEqual(metrics["disc"]["hd95_mean"], 2.0, places=6)
+        self.assertAlmostEqual(metrics["cup"]["hd95_mean"], 2.0, places=6)
+
+    def test_hd95_multiplier_fails_closed_on_invalid_scale(self) -> None:
+        targets = torch.zeros(1, 2, 4, 4)
+        with self.assertRaises(ValueError):
+            OverlapAccumulator().update(
+                torch.full_like(targets, -20.0),
+                targets,
+                image_ids=["bad-scale"],
+                hd95_multipliers=[0.0],
+            )
+
 
 class OffsetSquareTests(unittest.TestCase):
     """Two 8x8 squares sharing four columns; every number below is hand-checkable."""
@@ -232,4 +257,3 @@ class PerImageCsvTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

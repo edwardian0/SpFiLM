@@ -296,6 +296,7 @@ def evaluate(
     overlap = OverlapAccumulator(threshold=threshold)
     sample_ids: list[str] = []
     image_size = 0
+    hd95_unit: str | None = None
     for batch_index, (images, targets, metadata) in enumerate(loader):
         images = images.to(device, non_blocking=device.type == "cuda")
         targets = targets.to(device, non_blocking=device.type == "cuda")
@@ -303,7 +304,29 @@ def evaluate(
         loss = criterion(logits, targets)
         total_loss += loss.item() * images.shape[0]
         sample_count += images.shape[0]
-        overlap.update(logits, targets, image_ids=metadata["sample_id"])
+        batch_hd95_unit = "letterboxed-grid pixels"
+        hd95_multipliers: list[float] | None = None
+        if "letterbox_scale" in metadata:
+            scales = [float(value) for value in metadata["letterbox_scale"]]
+            if len(scales) != images.shape[0] or any(
+                not math.isfinite(scale) or scale <= 0 for scale in scales
+            ):
+                raise RuntimeError(
+                    "RIM-ONE-DL letterbox scales must be finite, positive, and "
+                    "present once per evaluated image"
+                )
+            hd95_multipliers = [1.0 / scale for scale in scales]
+            batch_hd95_unit = "native pixels"
+        if hd95_unit is None:
+            hd95_unit = batch_hd95_unit
+        elif hd95_unit != batch_hd95_unit:
+            raise RuntimeError("Evaluation mixed incompatible HD95 coordinate frames")
+        overlap.update(
+            logits,
+            targets,
+            image_ids=metadata["sample_id"],
+            hd95_multipliers=hd95_multipliers,
+        )
         sample_ids.extend(metadata["sample_id"])
         image_size = targets.shape[-1]
         if max_batches is not None and batch_index + 1 >= max_batches:
@@ -317,6 +340,8 @@ def evaluate(
         "metric_frame": metric_frame(image_size),
         "degenerate_case_policy": DEGENERATE_POLICY,
     }
+    if hd95_unit == "native pixels":
+        metrics["hd95_unit"] = hd95_unit
     if per_image_csv is None:
         metrics.update(overlap.compute())
     else:
@@ -334,6 +359,7 @@ RIM_ONE_DL_PER_IMAGE_CONTEXT = (
     "native_width",
     "native_height",
     "letterbox_scale",
+    "hd95_unit",
 )
 
 
@@ -378,6 +404,7 @@ def _append_rim_one_dl_per_image_context(
                 "native_width": record.native_size[0],
                 "native_height": record.native_size[1],
                 "letterbox_scale": f"{image_size / max(record.native_size):.12g}",
+                "hd95_unit": "native_px",
             }
         )
 
@@ -578,7 +605,6 @@ def run_experiment(
         max_batches=max_batches,
         per_image_csv=output_dir / "test_per_image_metrics.csv",
     )
-    secondary_hospital_metrics: dict[str, Any] | None = None
     if config.dataset == "rim_one_dl":
         _append_rim_one_dl_per_image_context(
             output_dir / "test_per_image_metrics.csv",
@@ -589,64 +615,17 @@ def run_experiment(
             f"metrics computed on the {config.image_size}px full-source-image grid; "
             "each square ONH-cropped source is resized to "
             f"{config.image_size}x{config.image_size}, and the per-image native-to-grid "
-            "letterbox_scale is recorded in the metrics CSV; HD95 remains in grid "
-            "pixels, not millimetres or native pixels"
+            "letterbox_scale is recorded in the metrics CSV; each HD95 value is "
+            "divided by that scale and reported in native-source pixels, not "
+            "letterboxed-grid pixels or millimetres"
         )
+        if test_metrics.get("hd95_unit") != "native pixels":
+            raise RuntimeError(
+                "RIM-ONE-DL evaluation did not convert HD95 to native pixels"
+            )
         test_metrics["metric_frame"] = rim_metric_frame
         test_metrics["per_image_context_fields"] = list(
             RIM_ONE_DL_PER_IMAGE_CONTEXT
-        )
-
-        hospital_test_records = [
-            record for record in records if record.hospital_split == "test_set"
-        ]
-        if not hospital_test_records:
-            raise RuntimeError(
-                "RIM-ONE-DL secondary hospital evaluation has no test_set records"
-            )
-        hospital_dataset = _make_dataset(
-            hospital_test_records, config, augment=False
-        )
-        hospital_loader = _make_loader(
-            hospital_dataset,
-            config,
-            device,
-            False,
-            torch.Generator().manual_seed(config.seed),
-        )
-        secondary_hospital_metrics = evaluate(
-            model,
-            hospital_loader,
-            criterion,
-            device,
-            threshold=config.threshold,
-            max_batches=max_batches,
-            per_image_csv=output_dir / "hospital_test_per_image_metrics.csv",
-        )
-        _append_rim_one_dl_per_image_context(
-            output_dir / "hospital_test_per_image_metrics.csv",
-            hospital_test_records,
-            config.image_size,
-        )
-        hospital_ids = {record.sample_id for record in hospital_test_records}
-        secondary_hospital_metrics.update(
-            {
-                "metric_frame": rim_metric_frame,
-                "per_image_context_fields": list(RIM_ONE_DL_PER_IMAGE_CONTEXT),
-                "source_partition": "partitioned_by_hospital/test_set",
-                "primary_split_overlap": {
-                    split: len(
-                        hospital_ids
-                        & {record.sample_id for record in split_records}
-                    )
-                    for split, split_records in splits.items()
-                },
-                "interpretation": (
-                    "secondary descriptive provider-partition result only; the "
-                    "primary manifest samples across all 485 images, so this set "
-                    "overlaps primary train/val/test and is not an independent holdout"
-                ),
-            }
         )
     save_training_curves(history, output_dir / "training_curves.png")
     save_prediction_gallery(
@@ -689,11 +668,6 @@ def run_experiment(
             "test_predictions": str(output_dir / "test_predictions.png"),
         },
     }
-    if secondary_hospital_metrics is not None:
-        report["secondary_hospital_partition"] = secondary_hospital_metrics
-        report["artifacts"]["hospital_test_per_image_metrics"] = str(
-            output_dir / "hospital_test_per_image_metrics.csv"
-        )
     (output_dir / "test_metrics.json").write_text(
         json.dumps(report, indent=2), encoding="utf-8"
     )
@@ -701,27 +675,35 @@ def run_experiment(
         json.dumps(asdict(config), indent=2), encoding="utf-8"
     )
     _print_test_results(test_metrics, config.image_size)
-    if secondary_hospital_metrics is not None:
-        print(
-            "secondary RIM-ONE-DL hospital partition "
-            "(reported separately; not an independent holdout)",
-            flush=True,
-        )
-        _print_test_results(secondary_hospital_metrics, config.image_size)
     return report
 
 
 def _print_test_results(test_metrics: dict[str, Any], image_size: int) -> None:
-    print(
-        f"test results | Dice and IoU unitless | HD95 in {image_size}x{image_size} "
-        "letterboxed-grid pixels (not mm, not native pixels) | accuracy over all "
-        "pixels | disc and cup separate",
-        flush=True,
-    )
+    if test_metrics.get("hd95_unit") == "native pixels":
+        print(
+            "test results | Dice and IoU unitless | HD95 in per-image native "
+            "source pixels (not mm, not letterboxed-grid pixels) | accuracy over "
+            "all letterboxed-grid pixels | disc and cup separate",
+            flush=True,
+        )
+    else:
+        print(
+            f"test results | Dice and IoU unitless | HD95 in {image_size}x{image_size} "
+            "letterboxed-grid pixels (not mm, not native pixels) | accuracy over all "
+            "pixels | disc and cup separate",
+            flush=True,
+        )
     for name in CHANNEL_NAMES:
         structure = test_metrics[name]
         hd95_mean = structure["hd95_mean"]
-        hd95_text = "undefined" if hd95_mean is None else f"{hd95_mean:.2f}px"
+        hd95_suffix = (
+            " native-px"
+            if test_metrics.get("hd95_unit") == "native pixels"
+            else "px"
+        )
+        hd95_text = (
+            "undefined" if hd95_mean is None else f"{hd95_mean:.2f}{hd95_suffix}"
+        )
         print(
             f"  {name:<4} dice={structure['dice_mean']:.4f} "
             f"iou={structure['iou_mean']:.4f} "

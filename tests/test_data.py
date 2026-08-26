@@ -16,9 +16,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from spfilm.data import (  # noqa: E402
     DatasetLayoutError,
     FundusRecord,
+    RIM_ONE_DL_FELLOW_EYE_CAVEAT,
+    RIM_ONE_DL_MANIFEST_SCHEMA_VERSION,
     decode_mask_channels,
     load_rim_one_dl_split_manifest,
     provider_partition,
+    rim_one_dl_release_class_table,
     stratified_partition,
 )
 
@@ -113,7 +116,8 @@ class MaskDecodingTests(unittest.TestCase):
 
 
 class RimOneManifestTests(unittest.TestCase):
-    def test_manifest_maps_all_485_discovered_stems_exactly_once(self) -> None:
+    @staticmethod
+    def _records() -> list[FundusRecord]:
         records = [
             FundusRecord(
                 sample_id=f"sample_{index:03d}",
@@ -121,18 +125,41 @@ class RimOneManifestTests(unittest.TestCase):
                 image_path=Path(f"/sample_{index:03d}.png"),
                 mask_encoding="unused",
                 release_prefix=f"r{index % 3 + 1}",
+                diagnosis_class=(
+                    "glaucoma" if (index // 3) % 2 == 0 else "normal"
+                ),
             )
             for index in range(485)
         ]
-        payload = {
-            "schema_version": 1,
+        return records
+
+    @staticmethod
+    def _payload(records: list[FundusRecord]) -> dict[str, object]:
+        return {
+            "schema_version": RIM_ONE_DL_MANIFEST_SCHEMA_VERSION,
             "dataset": "rim_one_dl",
+            "seed": 42,
+            "source_record_count": len(records),
+            "provenance": {
+                "generator_script": "generate_rim_one_dl_split.py",
+                "git_commit": "0" * 40,
+                "working_tree_dirty": False,
+                "seed": 42,
+                "generation_date_utc": "2026-08-26",
+                "release_class_table": rim_one_dl_release_class_table(records),
+                "release_only_fallback_releases": [],
+                "fellow_eye_caveat": RIM_ONE_DL_FELLOW_EYE_CAVEAT,
+            },
             "partitions": {
                 "train": [record.sample_id for record in records[:340]],
                 "val": [record.sample_id for record in records[340:388]],
                 "test": [record.sample_id for record in records[388:]],
             },
         }
+
+    def test_manifest_maps_all_485_discovered_stems_exactly_once(self) -> None:
+        records = self._records()
+        payload = self._payload(records)
         with tempfile.TemporaryDirectory() as directory:
             manifest_path = Path(directory) / "rim_one_dl.json"
             manifest_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -143,6 +170,16 @@ class RimOneManifestTests(unittest.TestCase):
         )
         listed = [record.sample_id for rows in splits.values() for record in rows]
         self.assertEqual(len(listed), len(set(listed)))
+
+    def test_manifest_without_required_provenance_fails_closed(self) -> None:
+        records = self._records()
+        payload = self._payload(records)
+        del payload["provenance"]
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = Path(directory) / "rim_one_dl.json"
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(DatasetLayoutError):
+                load_rim_one_dl_split_manifest(records, manifest_path)
 
 
 class SplitTests(unittest.TestCase):

@@ -1,9 +1,32 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "dataset": "rim_one_dl",
   "seed": 42,
   "policy": "one-time random 70/10/20 split across all 485 hospital-tree images; jointly stratified by release prefix and glaucoma/normal class",
   "source_record_count": 485,
+  "provenance": {
+    "generator_script": "generate_rim_one_dl_split.py",
+    "git_commit": "2092c7b79653b5a4c6680eedad5ba0fe98a23896",
+    "working_tree_dirty": true,
+    "seed": 42,
+    "generation_date_utc": "2026-08-26",
+    "release_class_table": {
+      "r1": {
+        "glaucoma": 12,
+        "normal": 86
+      },
+      "r2": {
+        "glaucoma": 108,
+        "normal": 142
+      },
+      "r3": {
+        "glaucoma": 52,
+        "normal": 85
+      }
+    },
+    "release_only_fallback_releases": [],
+    "fellow_eye_caveat": "r3 filenames encode eye but not patient, so fellow-eye correlation is undetectable from filenames rather than known to be absent"
+  },
   "partition_distributions": {
     "train": {
       "total": 340,

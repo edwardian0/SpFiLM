@@ -8,6 +8,7 @@ exists only for data/manifest verification on a machine without CUDA.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -146,6 +147,7 @@ def check_config_and_data(
         records = discover_rim_one_dl(data_root)
         splits = build_splits(config, records, PROJECT_ROOT)
         audit = audit_records(records)
+        manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception as exc:
         print(f"  FAIL: {type(exc).__name__}: {exc}")
         return False, config
@@ -159,12 +161,24 @@ def check_config_and_data(
         (record.hospital_split, record.diagnosis_class) for record in records
     )
     print(f"  hospital/class        {dict(sorted(hospital_class.items()))}")
+    print("  class-folder agreement PASS (enforced during discovery)")
     print(
         "  release totals        "
         f"{dict(sorted(Counter(record.release_prefix for record in records).items()))}"
     )
     split_counts = {split: len(rows) for split, rows in splits.items()}
     print(f"  manifest counts       {split_counts}")
+    provenance = manifest_payload["provenance"]
+    print(f"  manifest generator    {provenance['generator_script']}")
+    print(f"  generation commit     {provenance['git_commit']}")
+    print(f"  generation date       {provenance['generation_date_utc']}")
+    print(f"  generation seed       {provenance['seed']}")
+    print(f"  release/class table   {provenance['release_class_table']}")
+    print(
+        "  release-only fallback "
+        f"{provenance['release_only_fallback_releases']}"
+    )
+    print(f"  fellow-eye caveat     {provenance['fellow_eye_caveat']}")
     if split_counts != RIM_ONE_DL_SPLIT_COUNTS:
         print(
             f"  FAIL: manifest counts differ from {RIM_ONE_DL_SPLIT_COUNTS}"
