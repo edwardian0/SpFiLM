@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=9
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
-#SBATCH --time=0-00:30:00
+#SBATCH --time=0-05:00:00
 #SBATCH --output=/users/k23123868/edward/logs/rimone_s2_%j.out
 #SBATCH --error=/users/k23123868/edward/logs/rimone_s2_%j.err
 #SBATCH --exclude=erc-hpc-comp[048,054,170-175,177,178,196]
