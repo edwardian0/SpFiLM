@@ -6,13 +6,14 @@
 #SBATCH --cpus-per-task=9
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
-#SBATCH --time=0-00:30:00
+#SBATCH --time=0-03:00:00
 #SBATCH --output=/users/k23123868/edward/logs/drishti_s2_%j.out
 #SBATCH --error=/users/k23123868/edward/logs/drishti_s2_%j.err
-#SBATCH --exclude=erc-hpc-comp[048,054,170-175,177,178,196]
+#SBATCH --constraint="a100|a40|a30|l40s|h100"
+#SBATCH --exclude=erc-hpc-comp[048,054,170-175,177,178,196,235-239,242,252,253]
 #
-# Step 2 in-domain baseline: plain U-Net on refuge_zeiss, full image, 512px.
-# Submit: sbatch /users/k23123868/edward/spfilm/submit_refuge_s2.sh
+# Step 2 in-domain baseline: plain U-Net on rim-one, full image, 512px.
+# Submit: sbatch /users/k23123868/edward/spfilm/submit_drishti_s2.sh
 # Smoke: sbatch --time=0-00:20:00 /users/k23123868/edward/spfilm/submit_drishti_s2.sh --smoke
 # NOT resumable — no --requeue, no SIGUSR1. If preempted, the job dies
 # visibly and must be resubmitted from scratch.
@@ -34,11 +35,11 @@ python -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" \
   || { echo "FATAL: no usable CUDA on $(hostname)"; exit 1; }
 
 cd "$CODE_ROOT"
-echo "[$(date -u +%FT%TZ)] starting refuge_s2 on $(hostname) (job $SLURM_JOB_ID)"
+echo "[$(date -u +%FT%TZ)] starting drishti_s2 on $(hostname) (job $SLURM_JOB_ID)"
 echo "git commit: $(git rev-parse HEAD)"
 git diff --quiet || echo "WARNING: working tree is dirty"
 nvidia-smi -L
 
 python -u run_stage_s2.py --config "$CONFIG" --out-dir "$OUT_DIR" --seed 42 "$@"
 
-echo "[$(date -u +%FT%TZ)] refuge_s2 finished"
+echo "[$(date -u +%FT%TZ)] drishti_s2 finished"
