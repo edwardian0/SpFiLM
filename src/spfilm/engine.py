@@ -45,6 +45,21 @@ from .visualization import (
 )
 
 
+def _save_checkpoint(path, model, optimizer, epoch, val_metrics, config) -> None:
+    """Single writer for both checkpoints so their payload schemas cannot drift."""
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "epoch": epoch,
+            "validation_metrics": val_metrics,
+            "config": asdict(config),
+            "channel_order": ["disc", "cup"],
+        },
+        path,
+    )
+
+
 @dataclass(frozen=True)
 class Stage2Config:
     experiment_name: str
@@ -58,6 +73,12 @@ class Stage2Config:
     epochs: int = 40
     patience: int = 8
     min_epochs: int = 0
+    # "monitor": the stopping rule is evaluated and logged every epoch but never
+    # ends the loop, so every run consumes the full epoch budget and the schedule
+    # is identical across datasets, seeds and (later) conditioning arms.
+    # "terminate": pre-2026-08 behaviour, the rule breaks out of the loop.
+    early_stopping_mode: str = "monitor"
+    early_stopping_min_delta: float = 1e-5
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
     base_channels: int = 16
@@ -521,11 +542,18 @@ def run_experiment(
             # Can adjust patience (by increasing) and increas the factor to increas the time taken
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
+    if config.early_stopping_mode not in {"monitor", "terminate"}:
+        raise ValueError(
+            "early_stopping_mode must be 'monitor' or 'terminate', got "
+            f"{config.early_stopping_mode!r}"
+        )
     checkpoint_path = output_dir / "best_model.pt"
+    last_checkpoint_path = output_dir / "last_model.pt"
     history: list[dict[str, float]] = []
     best_val_loss = math.inf
     best_epoch = 0
     epochs_without_improvement = 0
+    would_have_stopped_at_epoch: int | None = None
     cup_repairs = {"repaired_samples": 0, "repaired_pixels": 0, "drawn_samples": 0}
     training_started = time.perf_counter()
     for epoch in range(1, config.epochs + 1):
@@ -551,26 +579,52 @@ def run_experiment(
         val_loss = float(val_metrics["loss"])
         if not math.isfinite(val_loss):
             raise RuntimeError(f"Validation loss became non-finite at epoch {epoch}")
-        # scheduler.step(val_loss)
+        # CosineAnnealingLR is epoch-driven and takes no metric; passing one
+        # would be read as the epoch number and the LR would never decay.
         scheduler.step()
+
+        is_best = val_loss < best_val_loss - config.early_stopping_min_delta
+        epochs_without_improvement = 0 if is_best else epochs_without_improvement + 1
+        # The stopping rule is evaluated in full every epoch regardless of mode.
+        # Under "monitor" its only effect is to record the epoch it first fired,
+        # so the early-stopped model stays reportable after the fact.
+        # min_epochs gates only this rule; LR scheduling and checkpointing are
+        # untouched. Val loss is dominated by disc, so cup Dice can sit near zero
+        # for many epochs before soft Dice pulls it out.
+        stop_rule_met = (
+            epoch >= config.min_epochs
+            and epochs_without_improvement >= config.patience
+        )
+        if stop_rule_met and would_have_stopped_at_epoch is None:
+            would_have_stopped_at_epoch = epoch
+
         row = {
             "epoch": float(epoch),
             "train_loss": train_loss,
             "val_loss": val_loss,
             "val_disc_dice": float(val_metrics["disc"]["dice_mean"]),
             "val_cup_dice": float(val_metrics["cup"]["dice_mean"]),
-            "learning_rate": float(scheduler.get_last_lr()[0]), # float(optimizer.param_groups[0]["lr"]),
+            "learning_rate": float(scheduler.get_last_lr()[0]),
             "epoch_seconds": time.perf_counter() - epoch_started,
+            "epochs_without_improvement": float(epochs_without_improvement),
+            "would_have_stopped_at_epoch": (
+                float(would_have_stopped_at_epoch)
+                if would_have_stopped_at_epoch is not None
+                else -1.0
+            ),
         }
         history.append(row)
         _write_history(history, output_dir / "history.csv")
-        is_best = val_loss < best_val_loss - 1e-5
         if epoch_callback is None:
             print(
-                f"epoch={epoch:02d} train_loss={train_loss:.4f} "
+                f"epoch={epoch:03d}/{config.epochs} "
+                f"lr={row['learning_rate']:.3e} "
+                f"train_loss={train_loss:.4f} "
                 f"val_loss={val_loss:.4f} "
                 f"disc_dice={row['val_disc_dice']:.4f} "
-                f"cup_dice={row['val_cup_dice']:.4f}",
+                f"cup_dice={row['val_cup_dice']:.4f} "
+                f"patience={epochs_without_improvement}/{config.patience} "
+                f"would_have_stopped_at_epoch={would_have_stopped_at_epoch}",
                 flush=True,
             )
         else:
@@ -579,26 +633,26 @@ def run_experiment(
         if is_best:
             best_val_loss = val_loss
             best_epoch = epoch
-            epochs_without_improvement = 0
-            torch.save(
-                {
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "epoch": epoch,
-                    "validation_metrics": val_metrics,
-                    "config": asdict(config),
-                    "channel_order": ["disc", "cup"],
-                },
-                checkpoint_path,
+            _save_checkpoint(
+                checkpoint_path, model, optimizer, epoch, val_metrics, config
             )
-        else:
-            epochs_without_improvement += 1
-        # min_epochs gates only the early-stop trigger; LR scheduling and
-        # checkpointing above are untouched. Val loss is dominated by disc, so cup
-        # Dice can sit near zero for many epochs before soft Dice pulls it out.
-        if epoch >= config.min_epochs and epochs_without_improvement >= config.patience:
+        # last_model.pt is rewritten every epoch so the final-epoch weights are
+        # recoverable without re-running, whatever the monitor decided.
+        _save_checkpoint(
+            last_checkpoint_path, model, optimizer, epoch, val_metrics, config
+        )
+
+        if config.early_stopping_mode == "terminate" and stop_rule_met:
             print(f"early_stopping best_epoch={best_epoch}", flush=True)
             break
+
+    epochs_run = len(history)
+    print(
+        f"epoch budget: ran {epochs_run} of {config.epochs} configured epochs "
+        f"(early_stopping_mode={config.early_stopping_mode}, "
+        f"would_have_stopped_at_epoch={would_have_stopped_at_epoch})",
+        flush=True,
+    )
 
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -649,6 +703,24 @@ def run_experiment(
         "device": str(device),
         "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
         "best_epoch": best_epoch,
+        "epochs_run": epochs_run,
+        "epochs_configured": config.epochs,
+        "early_stopping": {
+            "mode": config.early_stopping_mode,
+            "metric": "val_loss",
+            "direction": "min",
+            "min_delta": config.early_stopping_min_delta,
+            "patience": config.patience,
+            "min_epochs": config.min_epochs,
+            "would_have_stopped_at_epoch": would_have_stopped_at_epoch,
+            "terminated_training": epochs_run < config.epochs,
+        },
+        "lr_schedule": {
+            "name": "CosineAnnealingLR",
+            "t_max": config.epochs,
+            "eta_min": 1e-6,
+            "initial_lr": config.learning_rate,
+        },
         "checkpoint_selection": "lowest validation BCE + soft Dice loss",
         "training_seconds": time.perf_counter() - training_started,
         "split_counts": split_counts,
@@ -666,6 +738,7 @@ def run_experiment(
         "artifacts": {
             "test_per_image_metrics": str(output_dir / "test_per_image_metrics.csv"),
             "checkpoint": str(checkpoint_path),
+            "last_checkpoint": str(last_checkpoint_path),
             "history": str(output_dir / "history.csv"),
             "split_manifest": str(output_dir / "split_manifest.csv"),
             "data_audit": str(output_dir / "data_audit.json"),

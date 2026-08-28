@@ -157,7 +157,16 @@ def parse_args() -> argparse.Namespace:
         help="Frozen JSON config; every flag below overrides it",
     )
     parser.add_argument("--seed", type=int, help="Split, init, and augmentation seed")
-    parser.add_argument("--epochs", type=int, help="Maximum epochs before early stop")
+    parser.add_argument("--epochs", type=int, help="Epoch budget for the run")
+    parser.add_argument(
+        "--early-stopping-mode",
+        choices=("monitor", "terminate"),
+        help=(
+            "monitor: run the full epoch budget, early stopping only selects the "
+            "best checkpoint (default, set in config). terminate: restore the old "
+            "behaviour where the rule breaks out of the loop."
+        ),
+    )
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -226,6 +235,8 @@ def resolve_config(args: argparse.Namespace) -> tuple[Stage2Config, Path]:
         overrides["num_workers"] = args.num_workers
     if args.device is not None:
         overrides["requested_device"] = args.device
+    if args.early_stopping_mode is not None:
+        overrides["early_stopping_mode"] = args.early_stopping_mode
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     suffix = "_smoke" if args.smoke else ""
