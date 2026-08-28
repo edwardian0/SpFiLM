@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from .data import (
     FundusRecord,
@@ -512,10 +512,13 @@ def run_experiment(
     optimizer = torch.optim.Adam(
         model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
     )
-    scheduler = ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=3, min_lr=1e-6
-        # Can adjust patience (by increasing) and increas the factor to increas the time taken
+    scheduler = CosineAnnealingLR(
+        optimizer=optimizer,
+        T_max=config.epochs,
+        eta_min=1e-6, 
     )
+    #For Adam and ReduceOnPlateuaLR() Combo# optimizer, mode="min", factor=0.5, patience=3, min_lr=1e-6
+            # Can adjust patience (by increasing) and increas the factor to increas the time taken
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
     checkpoint_path = output_dir / "best_model.pt"
@@ -548,14 +551,15 @@ def run_experiment(
         val_loss = float(val_metrics["loss"])
         if not math.isfinite(val_loss):
             raise RuntimeError(f"Validation loss became non-finite at epoch {epoch}")
-        scheduler.step(val_loss)
+        # scheduler.step(val_loss)
+        scheduler.step()
         row = {
             "epoch": float(epoch),
             "train_loss": train_loss,
             "val_loss": val_loss,
             "val_disc_dice": float(val_metrics["disc"]["dice_mean"]),
             "val_cup_dice": float(val_metrics["cup"]["dice_mean"]),
-            "learning_rate": float(optimizer.param_groups[0]["lr"]),
+            "learning_rate": float(scheduler.get_last_lr()[0]), # float(optimizer.param_groups[0]["lr"]),
             "epoch_seconds": time.perf_counter() - epoch_started,
         }
         history.append(row)
