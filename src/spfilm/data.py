@@ -1197,10 +1197,3 @@ def seed_worker(worker_id: int) -> None:
     worker_seed = torch.initial_seed() % (2**32)
     random.seed(worker_seed)
     np.random.seed(worker_seed)
-
-
-def compose_lodo_fold(
-        domain_partitions: list,
-        held_out_domain,
-):
-    pass
