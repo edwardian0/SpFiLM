@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -13,8 +15,14 @@ from spfilm.lodo import (  # noqa: E402
     Domain,
     DomainPartitions,
     LodoFold,
+    LodoManifest,
+    LodoManifestError,
     SampleKey,
+    compose_all_lodo_folds,
     compose_lodo_fold,
+    load_lodo_manifest,
+    lodo_manifest_payload,
+    write_lodo_manifest,
 )
 
 
@@ -347,7 +355,7 @@ class LodoFoldTests(unittest.TestCase):
             setattr(fold, "train", self.val)
 
 
-class ComposeLodoFoldTests(unittest.TestCase):
+class LodoCompositionTests(unittest.TestCase):
     @staticmethod
     def _partitions(domain: Domain, prefix: str) -> DomainPartitions:
         return DomainPartitions(
@@ -477,6 +485,159 @@ class ComposeLodoFoldTests(unittest.TestCase):
             r"At least one source domain partition is required",
         ):
             compose_lodo_fold((self.target,), self.target.domain)
+
+    def test_all_fold_composer_returns_one_sorted_fold_per_domain(self) -> None:
+        folds = compose_all_lodo_folds(self.domain_partitions)
+        expected_domains = tuple(
+            sorted(partition.domain for partition in self.domain_partitions)
+        )
+
+        self.assertEqual(
+            tuple(fold.held_out_domain for fold in folds),
+            expected_domains,
+        )
+        self.assertEqual(
+            folds,
+            tuple(
+                compose_lodo_fold(self.domain_partitions, domain)
+                for domain in expected_domains
+            ),
+        )
+
+    def test_all_fold_result_is_independent_of_input_order(self) -> None:
+        forward = compose_all_lodo_folds(self.domain_partitions)
+        reverse = compose_all_lodo_folds(
+            tuple(reversed(self.domain_partitions))
+        )
+
+        self.assertEqual(forward, reverse)
+
+    def test_all_fold_composer_requires_a_tuple(self) -> None:
+        with self.assertRaisesRegex(
+            TypeError,
+            r"domain_partitions must be a tuple",
+        ):
+            compose_all_lodo_folds(list(self.domain_partitions))
+
+    def test_all_fold_composer_rejects_invalid_members(self) -> None:
+        with self.assertRaisesRegex(
+            TypeError,
+            r"domain_partitions must contain only DomainPartitions",
+        ):
+            compose_all_lodo_folds(
+                self.domain_partitions + ("not-a-partition",)
+            )
+
+    def test_all_fold_composer_requires_at_least_two_domains(self) -> None:
+        for domain_partitions in ((), (self.target,)):
+            with self.subTest(domain_partitions=domain_partitions):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"At least two domain partitions are required",
+                ):
+                    compose_all_lodo_folds(domain_partitions)
+
+    def test_all_fold_composer_rejects_duplicate_domains(self) -> None:
+        duplicate = self._partitions(self.source_a.domain, "duplicate-zeiss")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"domain_partitions contains duplicate domains",
+        ):
+            compose_all_lodo_folds(self.domain_partitions + (duplicate,))
+
+
+class LodoManifestTests(unittest.TestCase):
+    @staticmethod
+    def _partitions(domain: Domain, prefix: str) -> DomainPartitions:
+        return DomainPartitions(
+            domain=domain,
+            train=(
+                SampleKey(domain, f"{prefix}-train-2"),
+                SampleKey(domain, f"{prefix}-train-1"),
+            ),
+            val=(SampleKey(domain, f"{prefix}-val-1"),),
+            test=(SampleKey(domain, f"{prefix}-test-1"),),
+        )
+
+    def setUp(self) -> None:
+        self.partitions = (
+            self._partitions(Domain.RIM_ONE_DL, "rim"),
+            self._partitions(Domain.DRISHTI_GS, "drishti"),
+            self._partitions(Domain.REFUGE_ZEISS, "zeiss"),
+        )
+        self.split_seeds = {
+            Domain.REFUGE_ZEISS: 42,
+            Domain.DRISHTI_GS: 42,
+            Domain.RIM_ONE_DL: None,
+        }
+
+    def test_manifest_round_trip_preserves_exact_protocol(self) -> None:
+        manifest = LodoManifest.build(self.partitions, self.split_seeds)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_lodo_manifest(
+                manifest,
+                Path(directory) / "lodo.json",
+            )
+            loaded = load_lodo_manifest(path)
+
+        self.assertEqual(loaded, manifest)
+        self.assertEqual(
+            loaded.folds,
+            compose_all_lodo_folds(loaded.domain_partitions),
+        )
+
+    def test_manifest_serialization_is_canonical(self) -> None:
+        forward = LodoManifest.build(self.partitions, self.split_seeds)
+        reverse = LodoManifest.build(
+            tuple(reversed(self.partitions)),
+            dict(reversed(tuple(self.split_seeds.items()))),
+        )
+
+        self.assertEqual(forward, reverse)
+        self.assertEqual(
+            json.dumps(lodo_manifest_payload(forward), sort_keys=True),
+            json.dumps(lodo_manifest_payload(reverse), sort_keys=True),
+        )
+
+    def test_manifest_rejects_fold_tampering(self) -> None:
+        manifest = LodoManifest.build(self.partitions, self.split_seeds)
+        payload = lodo_manifest_payload(manifest)
+        payload["folds"][0]["test"][0]["sample_id"] = "tampered-test"
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tampered.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(
+                LodoManifestError,
+                r"folds do not match recomposed domain partitions",
+            ):
+                load_lodo_manifest(path)
+
+    def test_manifest_requires_one_split_seed_entry_per_domain(self) -> None:
+        incomplete_seeds = dict(self.split_seeds)
+        del incomplete_seeds[Domain.DRISHTI_GS]
+
+        with self.assertRaisesRegex(
+            LodoManifestError,
+            r"split_seeds domains must exactly match domain_partitions",
+        ):
+            LodoManifest.build(self.partitions, incomplete_seeds)
+
+    def test_manifest_rejects_unknown_root_fields(self) -> None:
+        manifest = LodoManifest.build(self.partitions, self.split_seeds)
+        payload = lodo_manifest_payload(manifest)
+        payload["unexpected"] = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "unexpected.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(
+                LodoManifestError,
+                r"manifest keys must be exactly",
+            ):
+                load_lodo_manifest(path)
 
 
 if __name__ == "__main__":

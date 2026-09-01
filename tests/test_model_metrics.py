@@ -8,11 +8,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, Dataset
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from spfilm.engine import evaluate  # noqa: E402
 from spfilm.metrics import (  # noqa: E402
     OverlapAccumulator,
     hd95,
@@ -24,6 +26,34 @@ from spfilm.model import PlainUNet  # noqa: E402
 
 
 CANVAS = 24
+
+
+class _EvaluationDataset(Dataset):
+    def __init__(self, domain: str) -> None:
+        self.domain = domain
+
+    def __len__(self) -> int:
+        return 1
+
+    def __getitem__(self, index: int):
+        return (
+            torch.zeros(3, 8, 8),
+            torch.zeros(2, 8, 8),
+            {
+                "sample_id": f"sample-{index}",
+                "domain": self.domain,
+                "letterbox_scale": 0.5,
+            },
+        )
+
+
+class _EmptyPredictionModel(torch.nn.Module):
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        return torch.full(
+            (images.shape[0], 2, images.shape[2], images.shape[3]),
+            -20.0,
+            device=images.device,
+        )
 
 
 def _square(top: int, left: int, size: int = 8) -> np.ndarray:
@@ -109,6 +139,43 @@ class MetricTests(unittest.TestCase):
                 targets,
                 image_ids=["bad-scale"],
                 hd95_multipliers=[0.0],
+            )
+
+    def test_evaluation_converts_hd95_only_when_explicitly_native(self) -> None:
+        loader = DataLoader(_EvaluationDataset("rim_one_dl"), batch_size=1)
+        model = _EmptyPredictionModel()
+        criterion = torch.nn.BCEWithLogitsLoss()
+
+        grid_metrics = evaluate(
+            model,
+            loader,
+            criterion,
+            torch.device("cpu"),
+            threshold=0.5,
+        )
+        native_metrics = evaluate(
+            model,
+            loader,
+            criterion,
+            torch.device("cpu"),
+            threshold=0.5,
+            native_hd95=True,
+        )
+
+        self.assertNotIn("hd95_unit", grid_metrics)
+        self.assertEqual(native_metrics["hd95_unit"], "native pixels")
+
+    def test_native_hd95_rejects_non_rim_domain(self) -> None:
+        loader = DataLoader(_EvaluationDataset("refuge_zeiss"), batch_size=1)
+
+        with self.assertRaisesRegex(RuntimeError, r"only defined for RIM-ONE-DL"):
+            evaluate(
+                _EmptyPredictionModel(),
+                loader,
+                torch.nn.BCEWithLogitsLoss(),
+                torch.device("cpu"),
+                threshold=0.5,
+                native_hd95=True,
             )
 
 

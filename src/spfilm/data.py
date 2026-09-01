@@ -158,6 +158,95 @@ def discover_refuge_training(root: str | Path) -> list[FundusRecord]:
     ]
 
 
+def discover_refuge_validation(
+    root: str | Path,
+    image_subdir: str | None = None,
+    mask_subdir: str | None = None,
+) -> list[FundusRecord]:
+    """Pair the 400 REFUGE validation-camera images and masks."""
+
+    root = Path(root).expanduser().resolve()
+    image_candidates = (
+        [root / image_subdir]
+        if image_subdir is not None
+        else [
+            root / "REFUGE-Validation400" / "REFUGE-Validation400",
+            root / "REFUGE-Validation400",
+        ]
+    )
+    mask_candidates = (
+        [root / mask_subdir]
+        if mask_subdir is not None
+        else [
+            root
+            / "REFUGE-Validation400-GT"
+            / "REFUGE-Validation400-GT"
+            / "Disc_Cup_Masks",
+            root / "REFUGE-Validation400-GT" / "Disc_Cup_Masks",
+        ]
+    )
+    image_root = next(
+        (
+            candidate
+            for candidate in image_candidates
+            if len(_files(candidate, {".jpg", ".jpeg", ".png"})) == 400
+        ),
+        None,
+    )
+    mask_root = next(
+        (
+            candidate
+            for candidate in mask_candidates
+            if len(_files(candidate, {".bmp", ".png"})) == 400
+        ),
+        None,
+    )
+    if image_root is None or mask_root is None:
+        image_counts = {
+            str(path): len(_files(path, {".jpg", ".jpeg", ".png"}))
+            for path in image_candidates
+            if path.exists()
+        }
+        mask_counts = {
+            str(path): len(_files(path, {".bmp", ".png"}))
+            for path in mask_candidates
+            if path.exists()
+        }
+        raise DatasetLayoutError(
+            "REFUGE validation-camera pool was not found with 400 paired files. "
+            f"Image candidate counts: {image_counts}; mask candidate counts: "
+            f"{mask_counts}"
+        )
+
+    images = _unique_by_stem(
+        _files(image_root, {".jpg", ".jpeg", ".png"}),
+        "REFUGE validation image",
+    )
+    masks = _unique_by_stem(
+        _files(mask_root, {".bmp", ".png"}),
+        "REFUGE validation mask",
+    )
+    missing_masks = sorted(images.keys() - masks.keys())
+    orphan_masks = sorted(masks.keys() - images.keys())
+    if missing_masks or orphan_masks:
+        raise DatasetLayoutError(
+            "REFUGE validation image/mask pairing failed: "
+            f"missing masks={missing_masks[:5]}, orphan masks={orphan_masks[:5]}"
+        )
+
+    return [
+        FundusRecord(
+            sample_id=stem,
+            domain="refuge_canon_val",
+            image_path=images[stem],
+            combined_mask_path=masks[stem],
+            mask_encoding="refuge_0_cup_128_disc_255_background",
+            stratum=images[stem].parent.name.lower().replace("-", "_"),
+        )
+        for stem in sorted(images)
+    ]
+
+
 def discover_drishti(root: str | Path) -> list[FundusRecord]:
     """Pair Drishti-GS images with its four-reader consensus soft maps."""
 
@@ -922,7 +1011,9 @@ def audit_records(records: Sequence[FundusRecord]) -> dict[str, object]:
                 f"image={image_size}, mask={mask_size}"
             )
         image_sizes.add(image_size)
-        image_hashes.setdefault(_sha256(record.image_path), []).append(record.sample_id)
+        image_hashes.setdefault(_sha256(record.image_path), []).append(
+            f"{record.domain}:{record.sample_id}"
+        )
         disc_areas.append(int(masks[0].sum()))
         cup_areas.append(int(masks[1].sum()))
 
@@ -941,8 +1032,10 @@ def audit_records(records: Sequence[FundusRecord]) -> dict[str, object]:
             "max": int(array.max()),
         }
 
+    domain_counts = Counter(record.domain for record in records)
     result: dict[str, object] = {
-        "domain": records[0].domain,
+        "domain": records[0].domain if len(domain_counts) == 1 else "mixed",
+        "domain_counts": dict(sorted(domain_counts.items())),
         "sample_count": len(records),
         "mask_encoding": sorted({record.mask_encoding for record in records}),
         "split_hints": {
@@ -968,13 +1061,14 @@ def audit_records(records: Sequence[FundusRecord]) -> dict[str, object]:
         },
         "status": "ok",
     }
-    if records[0].domain == "rim_one_dl":
+    if any(record.domain == "rim_one_dl" for record in records):
+        rim_records = [record for record in records if record.domain == "rim_one_dl"]
         result["source_cup_within_disc_repairs"] = {
             "sample_count": sum(
-                record.source_cup_repair_pixels > 0 for record in records
+                record.source_cup_repair_pixels > 0 for record in rim_records
             ),
             "pixel_count": sum(
-                record.source_cup_repair_pixels for record in records
+                record.source_cup_repair_pixels for record in rim_records
             ),
             "policy": (
                 "five pinned source-annotation boundary defects are canonicalized "
@@ -1052,12 +1146,35 @@ def provider_partition(
 def validate_splits(
     splits: dict[str, list[FundusRecord]], records: Sequence[FundusRecord]
 ) -> None:
-    ids = {name: {record.sample_id for record in values} for name, values in splits.items()}
-    if ids["train"] & ids["val"] or ids["train"] & ids["test"] or ids["val"] & ids["test"]:
+    expected_names = {"train", "val", "test"}
+    if set(splits) != expected_names:
+        raise DatasetLayoutError(
+            "Splits must contain exactly train, val, and test"
+        )
+
+    def key(record: FundusRecord) -> tuple[str, str]:
+        return record.domain, record.sample_id
+
+    source_keys = [key(record) for record in records]
+    if len(source_keys) != len(set(source_keys)):
+        raise DatasetLayoutError("Source records contain duplicate domain/sample IDs")
+
+    split_keys = {
+        name: [key(record) for record in values]
+        for name, values in splits.items()
+    }
+    for name, keys in split_keys.items():
+        if len(keys) != len(set(keys)):
+            raise DatasetLayoutError(f"{name} contains duplicate domain/sample IDs")
+
+    ids = {name: set(keys) for name, keys in split_keys.items()}
+    if (
+        ids["train"] & ids["val"]
+        or ids["train"] & ids["test"]
+        or ids["val"] & ids["test"]
+    ):
         raise DatasetLayoutError("Train, validation, and test sample IDs must be disjoint")
-    if ids["train"] | ids["val"] | ids["test"] != {
-        record.sample_id for record in records
-    }:
+    if ids["train"] | ids["val"] | ids["test"] != set(source_keys):
         raise DatasetLayoutError("Split does not cover every source record exactly once")
     if any(not values for values in splits.values()):
         raise DatasetLayoutError("Train, validation, and test splits must all be non-empty")
@@ -1173,22 +1290,22 @@ class FundusSegmentationDataset(Dataset):
             "domain": record.domain,
             "image_path": str(record.image_path),
             "cup_repair_pixels": cup_repair_pixels,
+            "release_prefix": record.release_prefix or "",
+            "hospital_split": record.hospital_split or "",
+            "diagnosis_class": record.diagnosis_class or "",
+            "native_width": record.native_size[0] if record.native_size else 0,
+            "native_height": record.native_size[1] if record.native_size else 0,
+            "letterbox_scale": (
+                self.image_size / max(record.native_size)
+                if record.native_size is not None
+                else 1.0
+            ),
         }
         if record.release_prefix is not None:
             if record.native_size is None:
                 raise DatasetLayoutError(
                     f"{record.sample_id} has a release prefix but no native size"
                 )
-            metadata.update(
-                {
-                    "release_prefix": record.release_prefix,
-                    "hospital_split": record.hospital_split,
-                    "diagnosis_class": record.diagnosis_class,
-                    "native_width": record.native_size[0],
-                    "native_height": record.native_size[1],
-                    "letterbox_scale": self.image_size / max(record.native_size),
-                }
-            )
         return image_tensor, mask_tensor, metadata
 
 

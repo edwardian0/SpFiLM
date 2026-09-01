@@ -311,6 +311,7 @@ def evaluate(
     threshold: float,
     max_batches: int | None = None,
     per_image_csv: str | Path | None = None,
+    native_hd95: bool = False,
 ) -> dict[str, Any]:
     model.eval()
     total_loss = 0.0
@@ -326,9 +327,16 @@ def evaluate(
         loss = criterion(logits, targets)
         total_loss += loss.item() * images.shape[0]
         sample_count += images.shape[0]
-        batch_hd95_unit = "letterboxed-grid pixels"
+        batch_hd95_unit = (
+            "native pixels" if native_hd95 else "letterboxed-grid pixels"
+        )
         hd95_multipliers: list[float] | None = None
-        if "letterbox_scale" in metadata:
+        if native_hd95:
+            domains = [str(value) for value in metadata["domain"]]
+            if any(domain != "rim_one_dl" for domain in domains):
+                raise RuntimeError(
+                    "Native-pixel HD95 is only defined for RIM-ONE-DL batches"
+                )
             scales = [float(value) for value in metadata["letterbox_scale"]]
             if len(scales) != images.shape[0] or any(
                 not math.isfinite(scale) or scale <= 0 for scale in scales
@@ -338,7 +346,6 @@ def evaluate(
                     "present once per evaluated image"
                 )
             hd95_multipliers = [1.0 / scale for scale in scales]
-            batch_hd95_unit = "native pixels"
         if hd95_unit is None:
             hd95_unit = batch_hd95_unit
         elif hd95_unit != batch_hd95_unit:
@@ -454,6 +461,7 @@ def run_experiment(
     records: Sequence[FundusRecord] | None = None,
     split_records: dict[str, list[FundusRecord]] | None = None,
     epoch_callback: Callable[[dict[str, float], bool], None] | None = None,
+    split_policy: str | None = None,
 ) -> dict[str, Any]:
     """Audit, split, train, and evaluate the Stage 2 single-domain baseline.
 
@@ -504,7 +512,7 @@ def run_experiment(
             "prefix and glaucoma/normal class"
         ),
     }
-    audit["split_policy"] = split_policies.get(
+    audit["split_policy"] = split_policy or split_policies.get(
         config.dataset,
         "provider test locked; validation stratified from provider train",
     )
@@ -523,6 +531,12 @@ def run_experiment(
     train_dataset = _make_dataset(splits["train"], config, augment=True)
     val_dataset = _make_dataset(splits["val"], config, augment=False)
     test_dataset = _make_dataset(splits["test"], config, augment=False)
+    val_native_hd95 = all(
+        record.domain == "rim_one_dl" for record in splits["val"]
+    )
+    test_native_hd95 = all(
+        record.domain == "rim_one_dl" for record in splits["test"]
+    )
     generator = torch.Generator().manual_seed(config.seed)
     train_loader = _make_loader(train_dataset, config, device, True, generator)
     val_loader = _make_loader(val_dataset, config, device, False, generator)
@@ -575,6 +589,7 @@ def run_experiment(
             device,
             threshold=config.threshold,
             max_batches=max_batches,
+            native_hd95=val_native_hd95,
         )
         val_loss = float(val_metrics["loss"])
         if not math.isfinite(val_loss):
@@ -664,8 +679,9 @@ def run_experiment(
         threshold=config.threshold,
         max_batches=max_batches,
         per_image_csv=output_dir / "test_per_image_metrics.csv",
+        native_hd95=test_native_hd95,
     )
-    if config.dataset == "rim_one_dl":
+    if test_native_hd95:
         _append_rim_one_dl_per_image_context(
             output_dir / "test_per_image_metrics.csv",
             splits["test"],

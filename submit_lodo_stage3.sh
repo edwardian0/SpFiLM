@@ -1,0 +1,63 @@
+#!/bin/bash
+#SBATCH --job-name=lodo_s3
+#SBATCH --partition=interruptible_gpu
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=9
+#SBATCH --mem=32G
+#SBATCH --gres=gpu:1
+#SBATCH --time=0-03:00:00
+#SBATCH --output=/users/k23123868/edward/logs/lodo_s3_%j.out
+#SBATCH --error=/users/k23123868/edward/logs/lodo_s3_%j.err
+#SBATCH --constraint="a100|a40|a30|l40s|h100"
+#SBATCH --exclude=erc-hpc-comp[048,054,170-175,177,178,196,235-239,242,252,253]
+#
+# Step 3 leave-one-domain-out: plain U-Net, full image, 512px.
+# Submit one run:
+#   sbatch /users/k23123868/edward/spfilm/submit_lodo_stage3.sh refuge_zeiss 42
+# Smoke one run:
+#   sbatch --time=0-00:20:00 /users/k23123868/edward/spfilm/submit_lodo_stage3.sh \
+#     refuge_zeiss 42 --smoke
+# The full 4-domain x 5-seed protocol is 20 independent submissions.
+
+set -euo pipefail
+
+CODE_ROOT="/users/k23123868/edward/spfilm"
+CONFIG="$CODE_ROOT/configs/stage3_lodo_create.json"
+
+if (( $# < 2 )); then
+  echo "usage: sbatch $0 <held-out-domain> <seed> [--smoke]" >&2
+  echo "domains: refuge_zeiss refuge_canon_val drishti_gs rim_one_dl" >&2
+  exit 64
+fi
+
+HELD_OUT_DOMAIN="$1"
+RUN_SEED="$2"
+shift 2
+OUT_DIR="$CODE_ROOT/artifacts/runs/lodo_s3_${HELD_OUT_DOMAIN}_seed_${RUN_SEED}_${SLURM_JOB_ID}"
+
+mkdir -p /users/k23123868/edward/logs "$OUT_DIR"
+
+module load cuda
+module load anaconda3/2022.10-gcc-13.2.0
+eval "$(conda shell.bash hook)"
+conda activate spfilm
+
+python -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" \
+  || { echo "FATAL: no usable CUDA on $(hostname)"; exit 1; }
+
+cd "$CODE_ROOT"
+echo "[$(date -u +%FT%TZ)] starting lodo_s3 on $(hostname) (job $SLURM_JOB_ID)"
+echo "held-out domain: $HELD_OUT_DOMAIN"
+echo "run seed: $RUN_SEED"
+echo "git commit: $(git rev-parse HEAD)"
+git diff --quiet || echo "WARNING: working tree is dirty"
+nvidia-smi -L
+
+python -u run_stage3_lodo.py --config "$CONFIG" run \
+  --held-out-domain "$HELD_OUT_DOMAIN" \
+  --seed "$RUN_SEED" \
+  --out-dir "$OUT_DIR" \
+  "$@"
+
+echo "[$(date -u +%FT%TZ)] lodo_s3 finished"

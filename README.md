@@ -39,6 +39,60 @@ exists only to prove that the pipeline is connected correctly.
 The detailed protocol, decisions, score sanity range, and exit gate are in
 [`STAGE2.md`](STAGE2.md).
 
+## Stage 3 LODO quick start
+
+Stage 3 reuses each domain's locked Stage 2 train/validation/test roles. For a
+given held-out domain, training and validation are the unions of the other
+domains' train and validation partitions; testing is only the held-out domain's
+locked test partition. Source-domain tests and held-out train/validation samples
+are excluded.
+
+Prepare the membership file once, inspect it, then run the full validation gate:
+
+```bash
+.spfilm/bin/python run_stage3_lodo.py \
+  --config configs/stage3_lodo.json prepare
+
+git diff -- splits/lodo/lodo_manifest.json
+
+.spfilm/bin/python run_stage3_lodo.py \
+  --config configs/stage3_lodo.json check
+```
+
+`prepare` refuses to replace changed membership unless `--force` is explicit.
+`check` re-discovers all four datasets, recomposes every fold from the config,
+proves exact manifest coverage, and decodes every mask. The lighter
+`check --skip-mask-audit` still checks paths and membership but is not the full
+pre-training gate. Commit the reviewed `splits/lodo/lodo_manifest.json`; `run`
+does not create it automatically.
+
+Run one plumbing rehearsal, then one real fold/seed combination:
+
+```bash
+.spfilm/bin/python run_stage3_lodo.py \
+  --config configs/stage3_lodo.json run \
+  --held-out-domain refuge_zeiss --seed 42 --smoke --device cpu
+
+.spfilm/bin/python run_stage3_lodo.py \
+  --config configs/stage3_lodo.json run \
+  --held-out-domain refuge_zeiss --seed 42
+```
+
+Smoke output is deliberately marked as non-scientific. A non-smoke run refuses
+to overwrite a non-empty run directory. `--all` explicitly runs all 20
+domain/seed combinations sequentially; on CREATE, submit them as independent
+jobs instead:
+
+```bash
+sbatch submit_lodo_stage3.sh refuge_zeiss 42
+sbatch --time=0-00:20:00 submit_lodo_stage3.sh refuge_zeiss 42 --smoke
+```
+
+The CREATE wrapper uses `configs/stage3_lodo_create.json`. Prepare, review, and
+commit the same manifest before submitting. Its current wall time must cover the
+configured 300 epochs: `early_stopping_mode: monitor` selects a checkpoint but
+does not shorten training.
+
 ## Directory map
 
 ```text
@@ -49,17 +103,21 @@ spfilm/
 ├── src/spfilm/
 │   ├── data.py                         # discovery, decoding, splits, Dataset
 │   ├── engine.py                       # train/validate/test orchestration
+│   ├── lodo.py                         # immutable partitions/folds/manifest
+│   ├── stage3.py                       # Stage 3 config and record resolution
 │   ├── losses.py                       # BCE + soft Dice training objective
 │   ├── metrics.py                      # per-image disc/cup Dice and IoU
 │   ├── model.py                        # plain 2D U-Net
 │   └── visualization.py                # mask and prediction QA figures
 ├── tests/                              # fast contract and shape tests
 ├── run_stage2.py                       # audit / inspect / train / all CLI
+├── run_stage3_lodo.py                  # prepare / check / run LODO CLI
+├── submit_lodo_stage3.sh               # one CREATE fold/seed submission
 ├── STAGE2.md                           # research and execution protocol
 └── artifacts/                          # generated locally
 ```
 
-## Output contract
+## Stage 2 output contract
 
 A real run writes the following under `artifacts/stage2_refuge/`:
 
@@ -72,16 +130,9 @@ A real run writes the following under `artifacts/stage2_refuge/`:
 - `test_predictions.png`: targets, predictions, false positives, and false negatives.
 - `resolved_config.json`: the settings that actually ran.
 
-## Current RIM-ONE finding
+## Stage 3 output contract
 
-`../../datasets/RIM-ONE_DL_images` is not the release required by the brief. It
-contains 485 unique classification images repeated under two alternative split
-schemes (970 PNG files total) and no optic-disc/cup masks. The required
-RIM-ONE-r3 segmentation release has 159 images and a published 99/60 split.
-
-The code therefore refuses to invent RIM masks. After the correct release is
-present, make a 159-row manifest from
-`configs/rim_one_r3_manifest.example.csv`, explicitly choosing the averaged
-annotations (or another documented policy). This does not block the first
-REFUGE-only baseline, but it must be resolved before the multi-domain stage.
-
+Each run writes the normal engine artifacts plus `lodo_run.json` and
+`resolved_stage3_config.json`. `test_metrics.json` also records the held-out
+domain, run seed, manifest/config hashes, locked and executed split counts, and
+whether the run was a smoke rehearsal. Disc and cup metrics remain separate.
