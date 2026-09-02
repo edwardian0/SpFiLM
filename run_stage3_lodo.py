@@ -395,6 +395,11 @@ def _run_one(
     )
     lodo_metadata = {
         "protocol": "leave_one_domain_out_locked_test",
+        # The arm is the config's experiment_name, before the per-run domain and
+        # seed suffix is appended. Recording it means the reporting tool reads
+        # the arm rather than inferring it from a directory or a suffix, which
+        # is what keeps two conditioning arms distinguishable.
+        "arm": config.experiment_name,
         "held_out_domain": held_out_domain.value,
         "source_domains": sorted(
             {record.domain for record in locked_splits["train"]}
