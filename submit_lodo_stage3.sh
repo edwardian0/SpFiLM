@@ -7,6 +7,8 @@
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --time=0-03:00:00
+#SBATCH --requeue
+#SBATCH --open-mode=append
 #SBATCH --output=/users/k23123868/edward/logs/lodo_s3_%j.out
 #SBATCH --error=/users/k23123868/edward/logs/lodo_s3_%j.err
 #SBATCH --constraint="a100|a40|a30|l40s|h100"
@@ -34,6 +36,10 @@ fi
 HELD_OUT_DOMAIN="$1"
 RUN_SEED="$2"
 shift 2
+# A requeued job keeps the same SLURM_JOB_ID and so reuses this directory on
+# purpose: run_experiment finds resume_state.pt there and continues from the last
+# completed epoch instead of restarting.
+ATTEMPT="${SLURM_RESTART_COUNT:-0}"
 OUT_DIR="$CODE_ROOT/artifacts/runs/lodo_s3_${HELD_OUT_DOMAIN}_seed_${RUN_SEED}_${SLURM_JOB_ID}"
 
 mkdir -p /users/k23123868/edward/logs "$OUT_DIR"
@@ -49,6 +55,7 @@ python -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" \
 cd "$CODE_ROOT"
 echo "[$(date -u +%FT%TZ)] starting lodo_s3 on $(hostname) (job $SLURM_JOB_ID)"
 echo "held-out domain: $HELD_OUT_DOMAIN"
+echo "attempt: $ATTEMPT (0 = first run; >0 = requeued, resuming from checkpoint)"
 echo "run seed: $RUN_SEED"
 echo "git commit: $(git rev-parse HEAD)"
 git diff --quiet || echo "WARNING: working tree is dirty"

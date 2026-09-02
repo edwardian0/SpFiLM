@@ -22,7 +22,11 @@ os.environ.setdefault(
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from spfilm.data import FundusRecord  # noqa: E402
-from spfilm.engine import choose_device, run_experiment  # noqa: E402
+from spfilm.engine import (  # noqa: E402
+    RESUME_STATE_FILENAME,
+    choose_device,
+    run_experiment,
+)
 from spfilm.lodo import (  # noqa: E402
     Domain,
     LodoManifest,
@@ -313,6 +317,11 @@ def _require_fresh_output(base_output: Path, smoke: bool) -> Path:
         base_output.with_name(f"{base_output.name}_smoke") if smoke else base_output
     )
     if actual_output.exists() and any(actual_output.iterdir()):
+        # A requeued job keeps its SLURM_JOB_ID and so lands here again. A resume
+        # file means the previous attempt was preempted mid-training and can be
+        # continued; run_experiment revalidates it against config and splits.
+        if (actual_output / RESUME_STATE_FILENAME).is_file():
+            return actual_output
         raise Stage3DataError(
             f"Refusing to overwrite non-empty run directory {actual_output}; "
             "choose a new --out-dir"
@@ -392,6 +401,7 @@ def _run_one(
         records=records,
         split_records=executed_splits,
         split_policy=LODO_SPLIT_POLICY,
+        allow_resume=True,
     )
     lodo_metadata = {
         "protocol": "leave_one_domain_out_locked_test",
@@ -412,6 +422,7 @@ def _run_one(
         "config_sha256": _sha256(config_path),
         "git_revision": _git_revision(),
         "started_from_locked_membership": True,
+        "resumed_from_epoch": report.get("resumed_from_epoch"),
         "smoke_rehearsal": smoke,
         "scientific_result": not smoke,
         "locked_split_counts": {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import random
@@ -235,6 +236,62 @@ def _make_dataset(
     )
 
 
+RESUME_STATE_FILENAME = "resume_state.pt"
+
+
+def _resume_fingerprint(config: Stage2Config, split_counts: dict[str, int]) -> str:
+    """Identity of the run a resume file belongs to; a mismatch must never resume."""
+
+    payload = json.dumps(
+        {"config": asdict(config), "split_counts": split_counts}, sort_keys=True
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _save_resume_state(path: Path, **state: Any) -> None:
+    """Write everything needed to continue after preemption, atomically.
+
+    Preemption can land mid-write, so the payload goes to a temporary file and is
+    renamed into place. A half-written resume file would be worse than none.
+    """
+
+    temporary = path.with_name(path.name + ".tmp")
+    torch.save(
+        {
+            "schema_version": 1,
+            "rng": {
+                "python": random.getstate(),
+                "numpy": np.random.get_state(),
+                "torch": torch.get_rng_state(),
+                "torch_cuda": (
+                    torch.cuda.get_rng_state_all()
+                    if torch.cuda.is_available()
+                    else None
+                ),
+            },
+            **state,
+        },
+        temporary,
+    )
+    temporary.replace(path)
+
+
+def _load_resume_state(path: Path, fingerprint: str) -> dict[str, Any] | None:
+    """Return resume state only when it provably belongs to this exact run."""
+
+    if not path.is_file():
+        return None
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    if state.get("schema_version") != 1:
+        raise RuntimeError(f"Unsupported resume-state schema in {path}")
+    if state.get("fingerprint") != fingerprint:
+        raise RuntimeError(
+            f"Resume state in {path} was written for a different config or split. "
+            "Delete the run directory and start again rather than resuming into it."
+        )
+    return state
+
+
 def _make_loader(
     dataset: FundusSegmentationDataset,
     config: Stage2Config,
@@ -462,6 +519,7 @@ def run_experiment(
     split_records: dict[str, list[FundusRecord]] | None = None,
     epoch_callback: Callable[[dict[str, float], bool], None] | None = None,
     split_policy: str | None = None,
+    allow_resume: bool = False,
 ) -> dict[str, Any]:
     """Audit, split, train, and evaluate the Stage 2 single-domain baseline.
 
@@ -563,14 +621,52 @@ def run_experiment(
         )
     checkpoint_path = output_dir / "best_model.pt"
     last_checkpoint_path = output_dir / "last_model.pt"
+    resume_path = output_dir / RESUME_STATE_FILENAME
+    fingerprint = _resume_fingerprint(config, split_counts)
     history: list[dict[str, float]] = []
     best_val_loss = math.inf
     best_epoch = 0
     epochs_without_improvement = 0
     would_have_stopped_at_epoch: int | None = None
     cup_repairs = {"repaired_samples": 0, "repaired_pixels": 0, "drawn_samples": 0}
+    start_epoch = 1
+    resumed_from_epoch: int | None = None
+    previously_elapsed = 0.0
+
+    resume_state = (
+        _load_resume_state(resume_path, fingerprint) if allow_resume else None
+    )
+    if resume_state is not None:
+        model.load_state_dict(resume_state["model_state_dict"])
+        optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+        scheduler.load_state_dict(resume_state["scheduler_state_dict"])
+        scaler.load_state_dict(resume_state["scaler_state_dict"])
+        # The loaders hold this generator by reference and only read it when
+        # iterated, so restoring its state here restores the shuffle stream.
+        generator.set_state(resume_state["generator_state"])
+        history = [dict(row) for row in resume_state["history"]]
+        best_val_loss = float(resume_state["best_val_loss"])
+        best_epoch = int(resume_state["best_epoch"])
+        epochs_without_improvement = int(resume_state["epochs_without_improvement"])
+        would_have_stopped_at_epoch = resume_state["would_have_stopped_at_epoch"]
+        cup_repairs = dict(resume_state["cup_repairs"])
+        previously_elapsed = float(resume_state["elapsed_seconds"])
+        rng = resume_state["rng"]
+        random.setstate(rng["python"])
+        np.random.set_state(rng["numpy"])
+        torch.set_rng_state(rng["torch"])
+        if rng["torch_cuda"] is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(rng["torch_cuda"])
+        start_epoch = int(resume_state["epoch"]) + 1
+        resumed_from_epoch = start_epoch
+        print(
+            f"resuming after preemption: {len(history)} epochs already done, "
+            f"continuing from epoch {start_epoch}/{config.epochs}",
+            flush=True,
+        )
+
     training_started = time.perf_counter()
-    for epoch in range(1, config.epochs + 1):
+    for epoch in range(start_epoch, config.epochs + 1):
         epoch_started = time.perf_counter()
         train_loss = train_one_epoch(
             model,
@@ -656,6 +752,26 @@ def run_experiment(
         _save_checkpoint(
             last_checkpoint_path, model, optimizer, epoch, val_metrics, config
         )
+        if allow_resume:
+            _save_resume_state(
+                resume_path,
+                fingerprint=fingerprint,
+                epoch=epoch,
+                model_state_dict=model.state_dict(),
+                optimizer_state_dict=optimizer.state_dict(),
+                scheduler_state_dict=scheduler.state_dict(),
+                scaler_state_dict=scaler.state_dict(),
+                generator_state=generator.get_state(),
+                history=history,
+                best_val_loss=best_val_loss,
+                best_epoch=best_epoch,
+                epochs_without_improvement=epochs_without_improvement,
+                would_have_stopped_at_epoch=would_have_stopped_at_epoch,
+                cup_repairs=cup_repairs,
+                elapsed_seconds=(
+                    previously_elapsed + (time.perf_counter() - training_started)
+                ),
+            )
 
         if config.early_stopping_mode == "terminate" and stop_rule_met:
             print(f"early_stopping best_epoch={best_epoch}", flush=True)
@@ -738,7 +854,10 @@ def run_experiment(
             "initial_lr": config.learning_rate,
         },
         "checkpoint_selection": "lowest validation BCE + soft Dice loss",
-        "training_seconds": time.perf_counter() - training_started,
+        "training_seconds": (
+            previously_elapsed + (time.perf_counter() - training_started)
+        ),
+        "resumed_from_epoch": resumed_from_epoch,
         "split_counts": split_counts,
         "cup_within_disc_repairs": {
             **cup_repairs,
@@ -769,6 +888,10 @@ def run_experiment(
     (output_dir / "resolved_config.json").write_text(
         json.dumps(asdict(config), indent=2), encoding="utf-8"
     )
+    if allow_resume and resume_path.is_file():
+        # The run finished. A stale resume file would let a later invocation
+        # "resume" a completed run instead of refusing to overwrite it.
+        resume_path.unlink()
     _print_test_results(test_metrics, config.image_size)
     return report
 
