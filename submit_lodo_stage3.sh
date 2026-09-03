@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=9
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
-#SBATCH --time=0-03:00:00
+#SBATCH --time=0-06:00:00
 #SBATCH --requeue
 #SBATCH --open-mode=append
 #SBATCH --output=/users/k23123868/edward/logs/lodo_s3_%j.out
