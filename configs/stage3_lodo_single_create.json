@@ -1,0 +1,86 @@
+{
+  "experiment_name": "stage3_single_source_plain_unet",
+  "stage": "single_source",
+  "arm": "plain",
+  "output_dir": "artifacts/stage3_single_source",
+  "parent_manifest_dir": "splits/lodo",
+  "fold_manifest_dir": "splits/single_source",
+
+  "protocol": {
+    "policy": "single-source cross-domain: train and select on one source domain, then evaluate each of the other three domains separately with no adaptation",
+    "source_domains": [
+      "refuge_zeiss",
+      "refuge_canon_val",
+      "drishti_gs",
+      "rim_one_dl"
+    ],
+    "seeds": [42, 43, 44, 45, 46],
+    "budget": {
+      "train": 40,
+      "val": 10,
+      "test": 50,
+      "subsample_seed": 42
+    },
+    "fold_membership": {
+      "train": "the source domain's budgeted stage-2 train partition",
+      "val": "the source domain's budgeted stage-2 val partition",
+      "tests": "each other domain's budgeted stage-2 test partition, scored separately"
+    },
+    "source_test_policy": "exclude",
+    "source_test_rationale": "Every sample keeps one project-wide role. The source domain's locked test partition is excluded rather than repurposed for training or validation, and target-domain validation images never influence checkpoint selection.",
+    "target_test_rationale": "Each unseen target is capped to the common 50-image budget and reported separately, so target sample count is fixed without pooling acquisition domains or HD95 coordinate frames."
+  },
+
+  "domains": {
+    "refuge_zeiss": {
+      "adapter": "refuge",
+      "data_root": "/scratch/prj/bc_ca_segmentation_in_tb_anatomy/datasets/REFUGE",
+      "split_policy": "stratified",
+      "test_fraction": 0.2,
+      "val_fraction": 0.2,
+      "split_seed": 42
+    },
+    "refuge_canon_val": {
+      "adapter": "refuge_canon_val",
+      "data_root": "/scratch/prj/bc_ca_segmentation_in_tb_anatomy/datasets/REFUGE",
+      "image_subdir": "REFUGE-Validation400/REFUGE-Validation400",
+      "mask_subdir": "REFUGE-Validation400-GT/REFUGE-Validation400-GT/Disc_Cup_Masks",
+      "split_policy": "stratified",
+      "test_fraction": 0.2,
+      "val_fraction": 0.2,
+      "split_seed": 42
+    },
+    "drishti_gs": {
+      "adapter": "drishti",
+      "data_root": "/scratch/prj/bc_ca_segmentation_in_tb_anatomy/datasets/DRISHTI-GS",
+      "split_policy": "provider",
+      "val_fraction": 0.2,
+      "split_seed": 42,
+      "note": "provider_partition locks the 51-image provider test set and splits the 50-image provider training partition into 40 train / 10 val; test_fraction does not apply."
+    },
+    "rim_one_dl": {
+      "adapter": "rim_one_dl",
+      "data_root": "/scratch/prj/bc_ca_segmentation_in_tb_anatomy/datasets",
+      "split_manifest": "splits/rim_one_dl.json",
+      "split_policy": "committed_manifest",
+      "note": "load_rim_one_dl_split_manifest is authoritative; the committed 70/10/20 manifest fixes membership and no fraction or seed in this file affects it."
+    }
+  },
+
+  "image_size": 512,
+  "batch_size": 8,
+  "num_workers": 8,
+  "epochs": 300,
+  "patience": 20,
+  "min_epochs": 30,
+  "early_stopping_mode": "monitor",
+  "early_stopping_min_delta": 1e-05,
+  "learning_rate": 0.001,
+  "weight_decay": 1e-05,
+  "base_channels": 16,
+  "threshold": 0.5,
+  "horizontal_flip_probability": 0.5,
+  "rotation_degrees": 10.0,
+  "brightness_contrast": 0.1,
+  "requested_device": "cuda"
+}

@@ -158,7 +158,7 @@ def write_run(
     metric_frame: str | None = None,
     hd95_unit: str | None = None,
 ) -> Path:
-    """Write one run directory in the shape run_stage3_lodo.py produces."""
+    """Write one run directory in the shape run_stage3_lodo_3_1.py produces."""
 
     run_dir = base / (directory_name or f"{domain.value}/seed_{seed}")
     run_dir.mkdir(parents=True, exist_ok=True)

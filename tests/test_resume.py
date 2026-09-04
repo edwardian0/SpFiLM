@@ -124,7 +124,7 @@ class ResumeStateTests(unittest.TestCase):
 
 class RequireFreshOutputTests(unittest.TestCase):
     def setUp(self) -> None:
-        from run_stage3_lodo import _require_fresh_output
+        from run_stage3_lodo_3_1 import _require_fresh_output
 
         self._require_fresh_output = _require_fresh_output
         self.directory = Path(tempfile.mkdtemp()) / "run"

@@ -6,7 +6,7 @@ import json
 import math
 import random
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -447,6 +447,18 @@ RIM_ONE_DL_PER_IMAGE_CONTEXT = (
     "letterbox_scale",
     "hd95_unit",
 )
+HD95_UNIT_NATIVE = "native pixels"
+
+
+def _rim_one_dl_metric_frame(image_size: int) -> str:
+    return (
+        f"metrics computed on the {image_size}px full-source-image grid; "
+        "each square ONH-cropped source is resized to "
+        f"{image_size}x{image_size}, and the per-image native-to-grid "
+        "letterbox_scale is recorded in the metrics CSV; each HD95 value is "
+        "divided by that scale and reported in native-source pixels, not "
+        "letterboxed-grid pixels or millimetres"
+    )
 
 
 def _append_rim_one_dl_per_image_context(
@@ -511,6 +523,69 @@ def _write_history(history: list[dict[str, float]], output_path: Path) -> None:
         writer.writerows(history)
 
 
+def evaluate_named_test_set(
+    model: torch.nn.Module,
+    records: Sequence[FundusRecord],
+    config: Stage2Config,
+    device: torch.device,
+    criterion: torch.nn.Module,
+    output_dir: Path,
+    name: str,
+    smoke: bool = False,
+) -> dict[str, Any]:
+    """Score one named test set on its own and write its metrics and overlays.
+
+    The single-source arm scores several unseen target domains with one trained
+    model. Each is evaluated separately rather than pooled, because Dice averaged
+    over a mixture of domains hides exactly the per-domain gap the experiment
+    exists to measure, and because HD95 is only comparable within one coordinate
+    frame: RIM-ONE-DL is reported in native source pixels and the others in
+    letterboxed-grid pixels, so a pooled HD95 would mix units.
+    """
+
+    if not records:
+        raise ValueError(f"Named test set {name!r} is empty")
+    dataset = _make_dataset(list(records), config, augment=False)
+    generator = torch.Generator().manual_seed(config.seed)
+    loader = _make_loader(dataset, config, device, False, generator)
+    native_hd95 = all(record.domain == "rim_one_dl" for record in records)
+    per_image_csv = output_dir / f"test_{name}_per_image_metrics.csv"
+    metrics = evaluate(
+        model,
+        loader,
+        criterion,
+        device,
+        threshold=config.threshold,
+        max_batches=1 if smoke else None,
+        per_image_csv=per_image_csv,
+        native_hd95=native_hd95,
+    )
+    if native_hd95:
+        _append_rim_one_dl_per_image_context(
+            per_image_csv, list(records), config.image_size
+        )
+        if metrics.get("hd95_unit") != HD95_UNIT_NATIVE:
+            raise RuntimeError(
+                f"{name} evaluation did not convert HD95 to native pixels"
+            )
+        metrics["metric_frame"] = _rim_one_dl_metric_frame(config.image_size)
+        metrics["per_image_context_fields"] = list(RIM_ONE_DL_PER_IMAGE_CONTEXT)
+    gallery_path = output_dir / f"test_{name}_predictions.png"
+    save_prediction_gallery(
+        model,
+        dataset,
+        device,
+        gallery_path,
+        threshold=config.threshold,
+        count=1 if smoke else 6,
+    )
+    metrics["artifacts"] = {
+        "per_image_metrics": str(per_image_csv),
+        "predictions": str(gallery_path),
+    }
+    return metrics
+
+
 def run_experiment(
     config: Stage2Config,
     project_root: str | Path,
@@ -520,13 +595,16 @@ def run_experiment(
     epoch_callback: Callable[[dict[str, float], bool], None] | None = None,
     split_policy: str | None = None,
     allow_resume: bool = False,
+    extra_test_sets: Mapping[str, Sequence[FundusRecord]] | None = None,
 ) -> dict[str, Any]:
     """Audit, split, train, and evaluate the Stage 2 single-domain baseline.
 
     ``records`` lets a caller supply an already-discovered record list (the same
     discovery this function would run) instead of reading the dataset twice.
     ``epoch_callback`` receives each epoch's history row and whether it was the new
-    best; when given it replaces the default per-epoch print.
+    best; when given it replaces the default per-epoch print. ``extra_test_sets``
+    names further already-unseen test sets to score with the same selected
+    checkpoint, each reported separately under ``test_by_name``.
     """
 
     project_root = Path(project_root).expanduser().resolve()
@@ -803,21 +881,25 @@ def run_experiment(
             splits["test"],
             config.image_size,
         )
-        rim_metric_frame = (
-            f"metrics computed on the {config.image_size}px full-source-image grid; "
-            "each square ONH-cropped source is resized to "
-            f"{config.image_size}x{config.image_size}, and the per-image native-to-grid "
-            "letterbox_scale is recorded in the metrics CSV; each HD95 value is "
-            "divided by that scale and reported in native-source pixels, not "
-            "letterboxed-grid pixels or millimetres"
-        )
-        if test_metrics.get("hd95_unit") != "native pixels":
+        if test_metrics.get("hd95_unit") != HD95_UNIT_NATIVE:
             raise RuntimeError(
                 "RIM-ONE-DL evaluation did not convert HD95 to native pixels"
             )
-        test_metrics["metric_frame"] = rim_metric_frame
+        test_metrics["metric_frame"] = _rim_one_dl_metric_frame(config.image_size)
         test_metrics["per_image_context_fields"] = list(
             RIM_ONE_DL_PER_IMAGE_CONTEXT
+        )
+    test_by_name: dict[str, Any] = {}
+    for name in sorted(extra_test_sets or {}):
+        test_by_name[name] = evaluate_named_test_set(
+            model,
+            list((extra_test_sets or {})[name]),
+            config,
+            device,
+            criterion,
+            output_dir,
+            name,
+            smoke=smoke,
         )
     save_training_curves(history, output_dir / "training_curves.png")
     save_prediction_gallery(
@@ -867,6 +949,7 @@ def run_experiment(
             ),
         },
         "test": test_metrics,
+        "test_by_name": test_by_name,
         "reporting_rule": "Disc and cup metrics are separate; no combined Dice is reported.",
         "metric_frame": test_metrics["metric_frame"],
         "degenerate_case_policy": DEGENERATE_POLICY,
@@ -880,6 +963,11 @@ def run_experiment(
             "mask_contact_sheet": str(output_dir / "mask_contact_sheet.png"),
             "training_curves": str(output_dir / "training_curves.png"),
             "test_predictions": str(output_dir / "test_predictions.png"),
+            **{
+                f"test_{name}_{artifact}": path
+                for name, metrics in test_by_name.items()
+                for artifact, path in metrics["artifacts"].items()
+            },
         },
     }
     (output_dir / "test_metrics.json").write_text(

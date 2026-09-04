@@ -1,0 +1,3707 @@
+{
+  "budget": {
+    "subsample_seed": 42,
+    "test": 50,
+    "train": 40,
+    "val": 10
+  },
+  "budgeted_partitions": {
+    "drishti_gs": {
+      "test": [
+        "drishtiGS_001",
+        "drishtiGS_003",
+        "drishtiGS_005",
+        "drishtiGS_006",
+        "drishtiGS_007",
+        "drishtiGS_009",
+        "drishtiGS_011",
+        "drishtiGS_013",
+        "drishtiGS_014",
+        "drishtiGS_019",
+        "drishtiGS_020",
+        "drishtiGS_021",
+        "drishtiGS_023",
+        "drishtiGS_025",
+        "drishtiGS_027",
+        "drishtiGS_028",
+        "drishtiGS_029",
+        "drishtiGS_030",
+        "drishtiGS_034",
+        "drishtiGS_039",
+        "drishtiGS_048",
+        "drishtiGS_050",
+        "drishtiGS_052",
+        "drishtiGS_053",
+        "drishtiGS_054",
+        "drishtiGS_055",
+        "drishtiGS_056",
+        "drishtiGS_059",
+        "drishtiGS_065",
+        "drishtiGS_067",
+        "drishtiGS_070",
+        "drishtiGS_071",
+        "drishtiGS_072",
+        "drishtiGS_073",
+        "drishtiGS_074",
+        "drishtiGS_077",
+        "drishtiGS_078",
+        "drishtiGS_079",
+        "drishtiGS_082",
+        "drishtiGS_083",
+        "drishtiGS_085",
+        "drishtiGS_086",
+        "drishtiGS_087",
+        "drishtiGS_091",
+        "drishtiGS_093",
+        "drishtiGS_095",
+        "drishtiGS_096",
+        "drishtiGS_097",
+        "drishtiGS_099",
+        "drishtiGS_100"
+      ],
+      "train": [
+        "drishtiGS_002",
+        "drishtiGS_004",
+        "drishtiGS_010",
+        "drishtiGS_012",
+        "drishtiGS_015",
+        "drishtiGS_017",
+        "drishtiGS_018",
+        "drishtiGS_022",
+        "drishtiGS_024",
+        "drishtiGS_026",
+        "drishtiGS_031",
+        "drishtiGS_033",
+        "drishtiGS_035",
+        "drishtiGS_036",
+        "drishtiGS_037",
+        "drishtiGS_040",
+        "drishtiGS_042",
+        "drishtiGS_044",
+        "drishtiGS_045",
+        "drishtiGS_046",
+        "drishtiGS_047",
+        "drishtiGS_051",
+        "drishtiGS_058",
+        "drishtiGS_060",
+        "drishtiGS_061",
+        "drishtiGS_062",
+        "drishtiGS_063",
+        "drishtiGS_064",
+        "drishtiGS_066",
+        "drishtiGS_068",
+        "drishtiGS_076",
+        "drishtiGS_080",
+        "drishtiGS_081",
+        "drishtiGS_084",
+        "drishtiGS_088",
+        "drishtiGS_089",
+        "drishtiGS_090",
+        "drishtiGS_092",
+        "drishtiGS_094",
+        "drishtiGS_098"
+      ],
+      "val": [
+        "drishtiGS_008",
+        "drishtiGS_016",
+        "drishtiGS_032",
+        "drishtiGS_038",
+        "drishtiGS_041",
+        "drishtiGS_049",
+        "drishtiGS_057",
+        "drishtiGS_069",
+        "drishtiGS_075",
+        "drishtiGS_101"
+      ]
+    },
+    "refuge_canon_val": {
+      "test": [
+        "v0003",
+        "v0010",
+        "v0011",
+        "v0027",
+        "v0030",
+        "v0032",
+        "v0035",
+        "v0054",
+        "v0056",
+        "v0060",
+        "v0066",
+        "v0067",
+        "v0078",
+        "v0086",
+        "v0095",
+        "v0098",
+        "v0100",
+        "v0123",
+        "v0124",
+        "v0145",
+        "v0170",
+        "v0181",
+        "v0193",
+        "v0199",
+        "v0218",
+        "v0229",
+        "v0231",
+        "v0241",
+        "v0245",
+        "v0249",
+        "v0250",
+        "v0252",
+        "v0254",
+        "v0260",
+        "v0281",
+        "v0290",
+        "v0306",
+        "v0327",
+        "v0332",
+        "v0334",
+        "v0336",
+        "v0339",
+        "v0346",
+        "v0348",
+        "v0352",
+        "v0355",
+        "v0365",
+        "v0373",
+        "v0381",
+        "v0387"
+      ],
+      "train": [
+        "v0001",
+        "v0013",
+        "v0022",
+        "v0043",
+        "v0055",
+        "v0057",
+        "v0061",
+        "v0064",
+        "v0077",
+        "v0081",
+        "v0092",
+        "v0105",
+        "v0126",
+        "v0135",
+        "v0136",
+        "v0137",
+        "v0139",
+        "v0149",
+        "v0152",
+        "v0178",
+        "v0208",
+        "v0209",
+        "v0253",
+        "v0261",
+        "v0263",
+        "v0266",
+        "v0267",
+        "v0271",
+        "v0273",
+        "v0286",
+        "v0287",
+        "v0311",
+        "v0312",
+        "v0313",
+        "v0322",
+        "v0344",
+        "v0358",
+        "v0359",
+        "v0366",
+        "v0390"
+      ],
+      "val": [
+        "v0012",
+        "v0119",
+        "v0160",
+        "v0166",
+        "v0248",
+        "v0251",
+        "v0284",
+        "v0295",
+        "v0335",
+        "v0398"
+      ]
+    },
+    "refuge_zeiss": {
+      "test": [
+        "g0010",
+        "g0011",
+        "g0012",
+        "g0026",
+        "g0031",
+        "n0003",
+        "n0027",
+        "n0030",
+        "n0035",
+        "n0040",
+        "n0045",
+        "n0048",
+        "n0051",
+        "n0060",
+        "n0067",
+        "n0069",
+        "n0076",
+        "n0086",
+        "n0100",
+        "n0107",
+        "n0110",
+        "n0124",
+        "n0128",
+        "n0130",
+        "n0140",
+        "n0144",
+        "n0174",
+        "n0185",
+        "n0199",
+        "n0202",
+        "n0216",
+        "n0219",
+        "n0221",
+        "n0227",
+        "n0241",
+        "n0242",
+        "n0251",
+        "n0258",
+        "n0265",
+        "n0270",
+        "n0278",
+        "n0299",
+        "n0300",
+        "n0301",
+        "n0316",
+        "n0323",
+        "n0327",
+        "n0340",
+        "n0348",
+        "n0356"
+      ],
+      "train": [
+        "g0016",
+        "g0028",
+        "g0036",
+        "g0039",
+        "n0009",
+        "n0013",
+        "n0015",
+        "n0024",
+        "n0033",
+        "n0036",
+        "n0074",
+        "n0079",
+        "n0082",
+        "n0093",
+        "n0103",
+        "n0108",
+        "n0138",
+        "n0154",
+        "n0156",
+        "n0161",
+        "n0187",
+        "n0198",
+        "n0201",
+        "n0220",
+        "n0235",
+        "n0236",
+        "n0238",
+        "n0247",
+        "n0253",
+        "n0256",
+        "n0275",
+        "n0283",
+        "n0308",
+        "n0310",
+        "n0321",
+        "n0336",
+        "n0352",
+        "n0355",
+        "n0357",
+        "n0358"
+      ],
+      "val": [
+        "g0022",
+        "n0066",
+        "n0070",
+        "n0090",
+        "n0123",
+        "n0173",
+        "n0181",
+        "n0239",
+        "n0320",
+        "n0345"
+      ]
+    },
+    "rim_one_dl": {
+      "test": [
+        "r1_Im019",
+        "r1_Im026",
+        "r1_Im071",
+        "r1_Im082",
+        "r1_Im108",
+        "r1_Im113",
+        "r1_Im120",
+        "r1_Im127",
+        "r1_Im152",
+        "r1_Im153",
+        "r1_Im161",
+        "r2_Im005",
+        "r2_Im021",
+        "r2_Im024",
+        "r2_Im028",
+        "r2_Im046",
+        "r2_Im052",
+        "r2_Im064",
+        "r2_Im068",
+        "r2_Im120",
+        "r2_Im132",
+        "r2_Im150",
+        "r2_Im160",
+        "r2_Im234",
+        "r2_Im252",
+        "r2_Im264",
+        "r2_Im266",
+        "r2_Im281",
+        "r2_Im301",
+        "r2_Im319",
+        "r2_Im347",
+        "r2_Im352",
+        "r2_Im362",
+        "r2_Im384",
+        "r2_Im403",
+        "r2_Im450",
+        "r3_G-23-R_left_half",
+        "r3_G-31-R_left_half",
+        "r3_G-34-L_left_half",
+        "r3_G-9-R_left_half",
+        "r3_N-28-R_left_half",
+        "r3_N-37-L_left_half",
+        "r3_N-38-R_left_half",
+        "r3_N-39-L_left_half",
+        "r3_N-53-L_left_half",
+        "r3_N-64-R_left_half",
+        "r3_N-67-L_left_half",
+        "r3_N-80-R_left_half",
+        "r3_N-85-L_left_half",
+        "r3_S-25-L_left_half"
+      ],
+      "train": [
+        "r1_Im011",
+        "r1_Im040",
+        "r1_Im047",
+        "r1_Im119",
+        "r1_Im136",
+        "r1_Im137",
+        "r1_Im144",
+        "r1_Im166",
+        "r2_Im054",
+        "r2_Im056",
+        "r2_Im084",
+        "r2_Im096",
+        "r2_Im104",
+        "r2_Im118",
+        "r2_Im126",
+        "r2_Im136",
+        "r2_Im140",
+        "r2_Im218",
+        "r2_Im230",
+        "r2_Im254",
+        "r2_Im257",
+        "r2_Im356",
+        "r2_Im357",
+        "r2_Im358",
+        "r2_Im393",
+        "r2_Im418",
+        "r2_Im428",
+        "r2_Im441",
+        "r2_Im448",
+        "r3_G-32-L_left_half",
+        "r3_N-12-R_left_half",
+        "r3_N-29-L_left_half",
+        "r3_N-32-R_left_half",
+        "r3_N-65-L_left_half",
+        "r3_N-7-L_left_half",
+        "r3_N-87-L_left_half",
+        "r3_N-91-L_left_half",
+        "r3_S-13-R_left_half",
+        "r3_S-14-R_left_half",
+        "r3_S-4-L_left_half"
+      ],
+      "val": [
+        "r1_Im054",
+        "r1_Im060",
+        "r2_Im066",
+        "r2_Im114",
+        "r2_Im122",
+        "r2_Im314",
+        "r2_Im424",
+        "r3_N-44-R_left_half",
+        "r3_N-71-L_left_half",
+        "r3_S-11-L_left_half"
+      ]
+    }
+  },
+  "folds": [
+    {
+      "source_domain": "drishti_gs",
+      "tests": {
+        "refuge_canon_val": [
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0003"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0010"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0011"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0027"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0030"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0032"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0035"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0054"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0056"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0060"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0066"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0067"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0078"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0086"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0095"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0098"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0100"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0123"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0124"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0145"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0170"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0181"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0193"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0199"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0218"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0229"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0231"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0241"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0245"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0249"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0250"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0252"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0254"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0260"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0281"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0290"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0306"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0327"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0332"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0334"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0336"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0339"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0346"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0348"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0352"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0355"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0365"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0373"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0381"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0387"
+          }
+        ],
+        "refuge_zeiss": [
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0010"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0011"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0012"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0026"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0031"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0003"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0027"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0030"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0035"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0040"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0045"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0048"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0051"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0060"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0067"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0069"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0076"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0086"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0100"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0107"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0110"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0124"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0128"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0130"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0140"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0144"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0174"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0185"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0199"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0202"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0216"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0219"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0221"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0227"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0241"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0242"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0251"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0258"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0265"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0270"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0278"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0299"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0300"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0301"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0316"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0323"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0327"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0340"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0348"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0356"
+          }
+        ],
+        "rim_one_dl": [
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im019"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im026"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im071"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im082"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im108"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im113"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im120"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im127"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im152"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im153"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im161"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im005"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im021"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im024"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im028"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im046"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im052"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im064"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im068"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im120"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im132"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im150"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im160"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im234"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im252"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im264"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im266"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im281"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im301"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im319"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im347"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im352"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im362"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im384"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im403"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im450"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-23-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-31-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-34-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-9-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-28-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-37-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-38-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-39-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-53-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-64-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-67-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-80-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-85-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_S-25-L_left_half"
+          }
+        ]
+      },
+      "train": [
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_002"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_004"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_010"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_012"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_015"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_017"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_018"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_022"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_024"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_026"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_031"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_033"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_035"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_036"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_037"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_040"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_042"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_044"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_045"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_046"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_047"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_051"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_058"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_060"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_061"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_062"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_063"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_064"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_066"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_068"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_076"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_080"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_081"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_084"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_088"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_089"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_090"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_092"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_094"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_098"
+        }
+      ],
+      "val": [
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_008"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_016"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_032"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_038"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_041"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_049"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_057"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_069"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_075"
+        },
+        {
+          "domain": "drishti_gs",
+          "sample_id": "drishtiGS_101"
+        }
+      ]
+    },
+    {
+      "source_domain": "refuge_canon_val",
+      "tests": {
+        "drishti_gs": [
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_001"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_003"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_005"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_006"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_007"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_009"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_011"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_013"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_014"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_019"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_020"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_021"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_023"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_025"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_027"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_028"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_029"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_030"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_034"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_039"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_048"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_050"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_052"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_053"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_054"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_055"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_056"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_059"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_065"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_067"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_070"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_071"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_072"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_073"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_074"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_077"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_078"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_079"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_082"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_083"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_085"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_086"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_087"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_091"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_093"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_095"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_096"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_097"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_099"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_100"
+          }
+        ],
+        "refuge_zeiss": [
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0010"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0011"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0012"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0026"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0031"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0003"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0027"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0030"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0035"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0040"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0045"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0048"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0051"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0060"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0067"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0069"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0076"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0086"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0100"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0107"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0110"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0124"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0128"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0130"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0140"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0144"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0174"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0185"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0199"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0202"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0216"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0219"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0221"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0227"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0241"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0242"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0251"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0258"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0265"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0270"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0278"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0299"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0300"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0301"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0316"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0323"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0327"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0340"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0348"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0356"
+          }
+        ],
+        "rim_one_dl": [
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im019"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im026"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im071"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im082"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im108"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im113"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im120"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im127"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im152"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im153"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im161"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im005"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im021"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im024"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im028"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im046"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im052"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im064"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im068"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im120"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im132"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im150"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im160"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im234"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im252"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im264"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im266"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im281"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im301"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im319"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im347"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im352"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im362"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im384"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im403"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im450"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-23-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-31-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-34-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-9-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-28-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-37-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-38-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-39-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-53-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-64-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-67-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-80-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-85-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_S-25-L_left_half"
+          }
+        ]
+      },
+      "train": [
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0001"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0013"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0022"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0043"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0055"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0057"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0061"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0064"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0077"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0081"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0092"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0105"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0126"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0135"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0136"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0137"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0139"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0149"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0152"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0178"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0208"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0209"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0253"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0261"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0263"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0266"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0267"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0271"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0273"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0286"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0287"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0311"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0312"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0313"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0322"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0344"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0358"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0359"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0366"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0390"
+        }
+      ],
+      "val": [
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0012"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0119"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0160"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0166"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0248"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0251"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0284"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0295"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0335"
+        },
+        {
+          "domain": "refuge_canon_val",
+          "sample_id": "v0398"
+        }
+      ]
+    },
+    {
+      "source_domain": "refuge_zeiss",
+      "tests": {
+        "drishti_gs": [
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_001"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_003"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_005"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_006"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_007"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_009"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_011"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_013"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_014"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_019"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_020"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_021"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_023"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_025"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_027"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_028"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_029"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_030"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_034"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_039"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_048"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_050"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_052"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_053"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_054"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_055"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_056"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_059"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_065"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_067"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_070"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_071"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_072"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_073"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_074"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_077"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_078"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_079"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_082"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_083"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_085"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_086"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_087"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_091"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_093"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_095"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_096"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_097"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_099"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_100"
+          }
+        ],
+        "refuge_canon_val": [
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0003"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0010"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0011"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0027"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0030"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0032"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0035"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0054"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0056"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0060"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0066"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0067"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0078"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0086"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0095"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0098"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0100"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0123"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0124"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0145"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0170"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0181"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0193"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0199"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0218"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0229"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0231"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0241"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0245"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0249"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0250"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0252"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0254"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0260"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0281"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0290"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0306"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0327"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0332"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0334"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0336"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0339"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0346"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0348"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0352"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0355"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0365"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0373"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0381"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0387"
+          }
+        ],
+        "rim_one_dl": [
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im019"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im026"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im071"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im082"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im108"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im113"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im120"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im127"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im152"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im153"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r1_Im161"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im005"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im021"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im024"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im028"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im046"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im052"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im064"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im068"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im120"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im132"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im150"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im160"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im234"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im252"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im264"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im266"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im281"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im301"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im319"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im347"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im352"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im362"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im384"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im403"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r2_Im450"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-23-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-31-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-34-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_G-9-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-28-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-37-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-38-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-39-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-53-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-64-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-67-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-80-R_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_N-85-L_left_half"
+          },
+          {
+            "domain": "rim_one_dl",
+            "sample_id": "r3_S-25-L_left_half"
+          }
+        ]
+      },
+      "train": [
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "g0016"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "g0028"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "g0036"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "g0039"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0009"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0013"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0015"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0024"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0033"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0036"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0074"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0079"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0082"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0093"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0103"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0108"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0138"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0154"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0156"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0161"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0187"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0198"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0201"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0220"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0235"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0236"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0238"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0247"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0253"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0256"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0275"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0283"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0308"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0310"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0321"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0336"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0352"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0355"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0357"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0358"
+        }
+      ],
+      "val": [
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "g0022"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0066"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0070"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0090"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0123"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0173"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0181"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0239"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0320"
+        },
+        {
+          "domain": "refuge_zeiss",
+          "sample_id": "n0345"
+        }
+      ]
+    },
+    {
+      "source_domain": "rim_one_dl",
+      "tests": {
+        "drishti_gs": [
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_001"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_003"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_005"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_006"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_007"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_009"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_011"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_013"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_014"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_019"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_020"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_021"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_023"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_025"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_027"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_028"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_029"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_030"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_034"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_039"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_048"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_050"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_052"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_053"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_054"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_055"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_056"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_059"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_065"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_067"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_070"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_071"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_072"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_073"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_074"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_077"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_078"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_079"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_082"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_083"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_085"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_086"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_087"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_091"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_093"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_095"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_096"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_097"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_099"
+          },
+          {
+            "domain": "drishti_gs",
+            "sample_id": "drishtiGS_100"
+          }
+        ],
+        "refuge_canon_val": [
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0003"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0010"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0011"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0027"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0030"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0032"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0035"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0054"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0056"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0060"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0066"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0067"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0078"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0086"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0095"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0098"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0100"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0123"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0124"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0145"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0170"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0181"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0193"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0199"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0218"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0229"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0231"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0241"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0245"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0249"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0250"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0252"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0254"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0260"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0281"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0290"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0306"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0327"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0332"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0334"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0336"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0339"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0346"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0348"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0352"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0355"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0365"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0373"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0381"
+          },
+          {
+            "domain": "refuge_canon_val",
+            "sample_id": "v0387"
+          }
+        ],
+        "refuge_zeiss": [
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0010"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0011"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0012"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0026"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "g0031"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0003"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0027"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0030"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0035"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0040"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0045"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0048"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0051"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0060"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0067"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0069"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0076"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0086"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0100"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0107"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0110"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0124"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0128"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0130"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0140"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0144"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0174"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0185"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0199"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0202"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0216"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0219"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0221"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0227"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0241"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0242"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0251"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0258"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0265"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0270"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0278"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0299"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0300"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0301"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0316"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0323"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0327"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0340"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0348"
+          },
+          {
+            "domain": "refuge_zeiss",
+            "sample_id": "n0356"
+          }
+        ]
+      },
+      "train": [
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r1_Im011"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r1_Im040"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r1_Im047"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r1_Im119"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r1_Im136"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r1_Im137"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r1_Im144"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r1_Im166"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im054"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im056"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im084"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im096"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im104"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im118"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im126"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im136"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im140"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im218"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im230"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im254"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im257"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im356"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im357"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im358"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im393"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im418"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im428"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im441"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im448"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_G-32-L_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_N-12-R_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_N-29-L_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_N-32-R_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_N-65-L_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_N-7-L_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_N-87-L_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_N-91-L_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_S-13-R_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_S-14-R_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_S-4-L_left_half"
+        }
+      ],
+      "val": [
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r1_Im054"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r1_Im060"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im066"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im114"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im122"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im314"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r2_Im424"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_N-44-R_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_N-71-L_left_half"
+        },
+        {
+          "domain": "rim_one_dl",
+          "sample_id": "r3_S-11-L_left_half"
+        }
+      ]
+    }
+  ],
+  "parent_manifest_sha256": "c77c35376a56dd662e8a1812756294c7413659904b340a9c562e33d3680a7e01",
+  "protocol": "single_source_locked_multi_target_test",
+  "schema_version": 1
+}
