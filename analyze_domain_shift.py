@@ -468,6 +468,148 @@ def plot_histograms(
     return output_path
 
 
+def _rebin(density: np.ndarray, bins: int) -> np.ndarray:
+    """Coarsen a density to ``bins`` bars by averaging equal groups of fine bins."""
+
+    if BIN_COUNT % bins:
+        raise ValueError(f"{BIN_COUNT} bins is not divisible into {bins} bars")
+    return density.reshape(bins, BIN_COUNT // bins).mean(axis=1)
+
+
+def plot_histogram_bars(
+    histograms: Sequence[DomainHistograms],
+    output_path: Path,
+    population: str,
+    bins: int = 64,
+) -> Path:
+    """One barred histogram per domain and channel, on shared axes.
+
+    The overlay figure compares the four domains on one pair of axes, which is
+    the right form for judging how far apart they sit but reads as a line chart.
+    This is the plain histogram of the same counts: one panel per domain, real
+    bars, and a shared y-limit down each column so the panels can be compared by
+    eye rather than by reading the tick labels.
+    """
+
+    edges = np.linspace(0.0, 1.0, bins + 1)
+    centres = (edges[:-1] + edges[1:]) / 2.0
+    width = 1.0 / bins
+    figure, axes = plt.subplots(
+        len(histograms),
+        len(CHANNELS),
+        figsize=(4.0 * len(CHANNELS), 2.6 * len(histograms)),
+        squeeze=False,
+        sharex=True,
+    )
+    for column, channel in enumerate(CHANNELS):
+        coarse = [
+            _rebin(histogram.density(population, channel), bins)
+            for histogram in histograms
+        ]
+        ceiling = max(float(values.max()) for values in coarse) * 1.08
+        for row, (histogram, values) in enumerate(zip(histograms, coarse)):
+            axis = axes[row, column]
+            axis.bar(
+                centres,
+                values,
+                width=width,
+                color=DOMAIN_COLOURS.get(histogram.domain, "#888888"),
+                edgecolor="white",
+                linewidth=0.3,
+            )
+            axis.set_xlim(0.0, 1.0)
+            axis.set_ylim(0.0, ceiling)
+            axis.grid(axis="y", alpha=0.2, linewidth=0.5)
+            if row == 0:
+                axis.set_title(channel, fontsize=12)
+            if column == 0:
+                axis.set_ylabel(f"{histogram.domain}\ndensity", fontsize=9)
+            if row == len(histograms) - 1:
+                axis.set_xlabel("Normalised intensity")
+    scope = (
+        "retinal field of view only"
+        if population == "fov"
+        else "all pixels, including the black surround"
+    )
+    figure.suptitle(
+        f"Pixel-intensity histograms by domain and channel ({scope}, {bins} bins)",
+        fontsize=14,
+    )
+    figure.tight_layout(rect=(0, 0, 1, 0.97))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output_path, dpi=160, bbox_inches="tight")
+    plt.close(figure)
+    return output_path
+
+
+def save_densities(
+    histograms: Sequence[DomainHistograms],
+    output_path: Path,
+    geometry: dict[str, dict[str, np.ndarray]] | None = None,
+) -> Path:
+    """Cache the accumulated densities so figures can be redrawn without rescanning."""
+
+    payload: dict[str, np.ndarray] = {}
+    for domain, fields in (geometry or {}).items():
+        for field, values in fields.items():
+            payload[f"{domain}|geom|{field}"] = values
+    for histogram in histograms:
+        payload[f"{histogram.domain}|image_count"] = np.asarray(
+            [histogram.image_count]
+        )
+        for population in POPULATIONS:
+            payload[f"{histogram.domain}|pixels|{population}"] = np.asarray(
+                [histogram.pixel_counts[population]]
+            )
+            for channel in CHANNELS:
+                payload[f"{histogram.domain}|{population}|{channel}"] = (
+                    histogram.density(population, channel)
+                )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(output_path, **payload)
+    return output_path
+
+
+def load_densities(
+    input_path: Path,
+) -> tuple[list[DomainHistograms], dict[str, dict[str, np.ndarray]]]:
+    """Rebuild accumulated histograms from the cache written by a full scan."""
+
+    with np.load(input_path) as archive:
+        domains = sorted(
+            {key.split("|", 1)[0] for key in archive.files if "|" in key}
+        )
+        geometry = {
+            domain: {
+                key.split("|geom|")[1]: archive[key]
+                for key in archive.files
+                if key.startswith(f"{domain}|geom|")
+            }
+            for domain in domains
+        }
+        histograms = [
+            DomainHistograms(
+                domain=domain,
+                image_count=int(archive[f"{domain}|image_count"][0]),
+                pixel_counts={
+                    population: int(archive[f"{domain}|pixels|{population}"][0])
+                    for population in POPULATIONS
+                },
+                densities={
+                    population: {
+                        channel: archive[f"{domain}|{population}|{channel}"]
+                        for channel in CHANNELS
+                    }
+                    for population in POPULATIONS
+                },
+            )
+            for domain in domains
+        ]
+    return histograms, {
+        domain: fields for domain, fields in geometry.items() if fields
+    }
+
+
 def plot_leave_one_out_distance(
     histograms: Sequence[DomainHistograms],
     output_path: Path,
@@ -679,6 +821,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Use only the first N images per domain (for a quick rehearsal)",
     )
     parser.add_argument(
+        "--from-cache",
+        action="store_true",
+        help="Redraw figures from a previous scan's densities.npz without rescanning",
+    )
+    parser.add_argument(
+        "--bars",
+        type=int,
+        default=64,
+        help="Bar count for the histogram figures; must divide 256",
+    )
+    parser.add_argument(
         "--skip-geometry",
         action="store_true",
         help="Skip mask decoding and report only the intensity distributions",
@@ -701,9 +854,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"FATAL: {error}", file=sys.stderr)
         return 2
 
+    cache_path = args.output_dir.expanduser().resolve() / "densities.npz"
     histograms: list[DomainHistograms] = []
     geometry: dict[str, dict[str, np.ndarray]] = {}
+    if args.from_cache:
+        if not cache_path.is_file():
+            print(f"FATAL: no cached scan at {cache_path}", file=sys.stderr)
+            return 2
+        histograms, geometry = load_densities(cache_path)
+        print(f"redrawing from {cache_path} without rescanning", flush=True)
     for domain in sorted(records_by_domain, key=lambda item: item.value):
+        if args.from_cache:
+            break
         records = records_by_domain[domain]
         if args.limit is not None:
             records = records[: args.limit]
@@ -743,6 +905,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     output_dir = args.output_dir.expanduser().resolve()
+    if not args.from_cache:
+        save_densities(histograms, cache_path, geometry)
+    bar_figure_paths = [
+        plot_histogram_bars(
+            histograms,
+            output_dir / f"intensity_histograms_bars_{population}.png",
+            population,
+            bins=args.bars,
+        )
+        for population in POPULATIONS
+    ]
     figure_path = plot_histograms(
         histograms, output_dir / "intensity_histograms.png"
     )
@@ -839,6 +1012,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print()
     for path in (
+        *bar_figure_paths,
         figure_path,
         distance_figure_path,
         geometry_figure_path,

@@ -461,6 +461,39 @@ def _run_one(
         split_policy=SINGLE_SOURCE_SPLIT_POLICY,
         allow_resume=True,
     )
+    # The engine takes exactly one primary test set, so it was handed the pooled
+    # union of the three target partitions. That pooled Dice is the one number
+    # this experiment exists to avoid: it averages three acquisition domains into
+    # a single score and hides the per-domain gap that is the whole result. It is
+    # renamed here so no reader or aggregator can reach for "test" by habit, and
+    # the per-domain results take the obvious key instead.
+    pooled = report.pop("test")
+    pooled["pooling"] = {
+        "pooled_over_domains": [domain.value for domain in target_domains],
+        "warning": (
+            "Pooled across three acquisition domains and therefore not a "
+            "per-domain result. Its HD95 also mixes RIM-ONE-DL, whose native "
+            "frame differs from the others. Report test_by_domain instead."
+        ),
+    }
+    report["test_pooled"] = pooled
+    report["test_by_domain"] = report.pop("test_by_name")
+    report["reporting_rule"] = (
+        "Disc and cup metrics are separate; no combined Dice is reported. The "
+        "three target domains are scored separately in test_by_domain, which is "
+        "the reportable result; test_pooled averages them and must never be "
+        "quoted as a cross-domain score."
+    )
+    print("per-target-domain test Dice (the reportable result):", flush=True)
+    for domain in target_domains:
+        block = report["test_by_domain"][domain.value]
+        print(
+            f"  {domain.value:<18} "
+            f"disc={block['disc']['dice_mean']:.4f} "
+            f"cup={block['cup']['dice_mean']:.4f} "
+            f"n={block['evaluated_sample_count']}",
+            flush=True,
+        )
     parent_path = parent_lodo_manifest_path(config, PROJECT_ROOT)
     single_source_metadata = {
         "protocol": SINGLE_SOURCE_PROTOCOL_NAME,
