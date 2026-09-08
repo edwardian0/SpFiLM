@@ -33,10 +33,11 @@ import csv
 import json
 import os
 import sys
+import zipfile
+from xml.etree import ElementTree
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -50,7 +51,6 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
-from PIL import Image  # noqa: E402
 
 from spfilm.data import FundusRecord, decode_mask_channels  # noqa: E402
 from spfilm.lodo import Domain  # noqa: E402
@@ -60,161 +60,24 @@ from spfilm.stage3 import (  # noqa: E402
     Stage3LodoConfig,
     discover_lodo_records,
 )
+from spfilm.global_histograms import (  # noqa: E402
+    BIN_COUNT,
+    CHANNELS,
+    DOMAIN_COLOURS,
+    FOV_LUMINANCE_THRESHOLD,
+    LUMA_WEIGHTS,
+    POPULATIONS,
+    DomainHistograms,
+    accumulate_domain,
+    bin_centres as _bin_centres,
+    plot_domain_overlay,
+    plot_global_histogram,
+    sample_images,
+)
 
 
 DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "stage3_lodo.json"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "artifacts" / "domain_shift"
-
-BIN_COUNT = 256
-CHANNELS = ("gray", "red", "green", "blue")
-POPULATIONS = ("all", "fov")
-# Below this luminance a pixel is the black surround outside the retinal disc
-# rather than tissue. Fundus surrounds sit within a few counts of zero, so the
-# threshold is far from any real retinal intensity and the choice is not
-# delicate; it is recorded in the JSON so the figure can be reproduced.
-FOV_LUMINANCE_THRESHOLD = 0.10
-# Rec. 601 luma. The green channel dominates it, which suits fundus photography:
-# green carries most of the vessel and rim contrast.
-LUMA_WEIGHTS = (0.299, 0.587, 0.114)
-DOMAIN_COLOURS = {
-    "refuge_zeiss": "#1f77b4",
-    "refuge_canon_val": "#17becf",
-    "drishti_gs": "#d62728",
-    "rim_one_dl": "#2ca02c",
-}
-
-
-@dataclass(frozen=True)
-class DomainHistograms:
-    """Normalised intensity densities for one domain, per channel and population."""
-
-    domain: str
-    image_count: int
-    pixel_counts: dict[str, int]
-    densities: dict[str, dict[str, np.ndarray]]
-
-    def density(self, population: str, channel: str) -> np.ndarray:
-        return self.densities[population][channel]
-
-
-def _bin_edges() -> np.ndarray:
-    return np.linspace(0.0, 1.0, BIN_COUNT + 1)
-
-
-def _bin_centres() -> np.ndarray:
-    edges = _bin_edges()
-    return (edges[:-1] + edges[1:]) / 2.0
-
-
-def _load_pixels(image_path: Path, working_size: int) -> np.ndarray:
-    """Decode one image to a small RGB float array in [0, 1].
-
-    ``draft`` lets the JPEG decoder downscale while decoding, which is what makes
-    it affordable to sweep every REFUGE image at full dataset size. The intensity
-    *distribution* is what is being estimated, and it is insensitive to this
-    resampling; the exact pixel grid is not needed.
-    """
-
-    with Image.open(image_path) as image:
-        image.draft("RGB", (working_size, working_size))
-        image = image.convert("RGB")
-        image.thumbnail((working_size, working_size), Image.BILINEAR)
-        return np.asarray(image, dtype=np.float32) / 255.0
-
-
-def _image_histograms(
-    image_path: Path, working_size: int
-) -> tuple[dict[str, np.ndarray], dict[str, int]]:
-    pixels = _load_pixels(image_path, working_size)
-    luminance = pixels @ np.asarray(LUMA_WEIGHTS, dtype=np.float32)
-    fov = luminance > FOV_LUMINANCE_THRESHOLD
-    edges = _bin_edges()
-
-    bands = {
-        "gray": luminance,
-        "red": pixels[..., 0],
-        "green": pixels[..., 1],
-        "blue": pixels[..., 2],
-    }
-    counts: dict[str, np.ndarray] = {}
-    for population in POPULATIONS:
-        selector = Ellipsis if population == "all" else fov
-        for channel, band in bands.items():
-            values = band if population == "all" else band[selector]
-            counts[f"{population}/{channel}"] = np.histogram(
-                values, bins=edges
-            )[0].astype(np.float64)
-    pixel_counts = {
-        "all": int(luminance.size),
-        "fov": int(fov.sum()),
-    }
-    return counts, pixel_counts
-
-
-def _worker(payload: tuple[str, int]) -> tuple[dict[str, np.ndarray], dict[str, int]]:
-    image_path, working_size = payload
-    return _image_histograms(Path(image_path), working_size)
-
-
-def accumulate_domain(
-    domain: str,
-    records: Sequence[FundusRecord],
-    working_size: int,
-    workers: int,
-) -> DomainHistograms:
-    """Sum per-image histograms, then normalise once at the end.
-
-    Summing counts and normalising afterwards weights each domain by its pixels,
-    not by its images, so a domain is not skewed by having a handful of unusually
-    large frames.
-    """
-
-    totals: dict[str, np.ndarray] = {
-        f"{population}/{channel}": np.zeros(BIN_COUNT, dtype=np.float64)
-        for population in POPULATIONS
-        for channel in CHANNELS
-    }
-    pixel_totals = {population: 0 for population in POPULATIONS}
-    payloads = [(str(record.image_path), working_size) for record in records]
-
-    if workers > 1:
-        with ProcessPoolExecutor(max_workers=workers) as pool:
-            results: Iterable[tuple[dict[str, np.ndarray], dict[str, int]]] = pool.map(
-                _worker, payloads, chunksize=8
-            )
-            collected = list(results)
-    else:
-        collected = [_worker(payload) for payload in payloads]
-
-    for counts, pixel_counts in collected:
-        for key, value in counts.items():
-            totals[key] += value
-        for population, value in pixel_counts.items():
-            pixel_totals[population] += value
-
-    densities: dict[str, dict[str, np.ndarray]] = {
-        population: {} for population in POPULATIONS
-    }
-    width = 1.0 / BIN_COUNT
-    for population in POPULATIONS:
-        for channel in CHANNELS:
-            counts = totals[f"{population}/{channel}"]
-            total = counts.sum()
-            if total <= 0:
-                raise Stage3DataError(
-                    f"{domain} {population}/{channel} accumulated no pixels"
-                )
-            # A density, not a count: the curves are comparable across domains
-            # of very different size, and each integrates to one.
-            densities[population][channel] = counts / total / width
-
-    return DomainHistograms(
-        domain=domain,
-        image_count=len(records),
-        pixel_counts=pixel_totals,
-        densities=densities,
-    )
-
 
 def _record_geometry(record: FundusRecord) -> dict[str, float]:
     """Measure how large the target structures are relative to the frame.
@@ -790,6 +653,299 @@ def _summary_rows(report: dict[str, object]) -> list[dict[str, object]]:
     return rows
 
 
+GLAUCOMA = "glaucoma"
+NON_GLAUCOMA = "non_glaucoma"
+DIAGNOSIS_CLASSES = (GLAUCOMA, NON_GLAUCOMA)
+# The four domains record the same fact in three different vocabularies, and one
+# of them does not record it on the record at all. Normalising here keeps that
+# mess out of the figures.
+_GLAUCOMA_WORDS = {"glaucoma", "glaucomatous", "1"}
+_NON_GLAUCOMA_WORDS = {"normal", "non_glaucoma", "non-glaucoma", "healthy", "0"}
+_XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+
+
+def _normalise_diagnosis(value: object) -> str | None:
+    if value is None:
+        return None
+    key = str(value).strip().lower()
+    if key in _GLAUCOMA_WORDS:
+        return GLAUCOMA
+    if key in _NON_GLAUCOMA_WORDS:
+        return NON_GLAUCOMA
+    return None
+
+
+def _read_xlsx_rows(path: Path) -> list[list[str]]:
+    """Read the first worksheet of an .xlsx as rows of strings.
+
+    An .xlsx is a zip of XML, so this needs only the standard library. Adding
+    openpyxl for one static label file would put an undeclared dependency in
+    front of every run, which is the trap OpenCV already set in this project.
+    """
+
+    with zipfile.ZipFile(path) as archive:
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+            shared = [
+                "".join(node.text or "" for node in item.iter(f"{_XLSX_NS}t"))
+                for item in root
+            ]
+        sheet = ElementTree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        rows: list[list[str]] = []
+        for row in sheet.iter(f"{_XLSX_NS}row"):
+            cells: list[str] = []
+            for cell in row.iter(f"{_XLSX_NS}c"):
+                value = cell.find(f"{_XLSX_NS}v")
+                text = "" if value is None else (value.text or "")
+                if cell.get("t") == "s" and text.isdigit():
+                    text = shared[int(text)]
+                cells.append(text)
+            rows.append(cells)
+        return rows
+
+
+def refuge_validation_labels(
+    config: Stage3LodoConfig, project_root: Path
+) -> dict[str, str]:
+    """Glaucoma labels for REFUGE-Validation400, keyed by image stem.
+
+    Unlike the other three domains, this one carries no diagnosis on the record:
+    the loader groups it under a single ``refuge_validation400`` stratum. The
+    labels do exist, in the ``Glaucoma Label`` column of the fovea spreadsheet
+    that ships beside the masks, so they are read from there rather than leaving
+    a quarter of the data out of the comparison.
+    """
+
+    for domain_config in config.domains:
+        if domain_config.domain.value != "refuge_canon_val":
+            continue
+        if not domain_config.mask_subdir:
+            break
+        root = (project_root / domain_config.data_root).resolve()
+        spreadsheet = root / Path(domain_config.mask_subdir).parent / "Fovea_locations.xlsx"
+        if not spreadsheet.is_file():
+            raise Stage3DataError(f"no REFUGE validation labels at {spreadsheet}")
+        rows = _read_xlsx_rows(spreadsheet)
+        header = rows[0]
+        try:
+            name_column = header.index("ImgName")
+            label_column = header.index("Glaucoma Label")
+        except ValueError as error:
+            raise Stage3DataError(
+                f"{spreadsheet} has no 'Glaucoma Label' column: {header}"
+            ) from error
+        labels: dict[str, str] = {}
+        for row in rows[1:]:
+            if len(row) <= max(name_column, label_column) or not row[name_column]:
+                continue
+            label = _normalise_diagnosis(row[label_column])
+            if label is not None:
+                labels[Path(row[name_column]).stem] = label
+        return labels
+    return {}
+
+
+def diagnosis_of(record: FundusRecord, extra_labels: dict[str, str]) -> str | None:
+    """Classify one record as glaucoma or not, or ``None`` if it is unlabelled."""
+
+    for candidate in (record.diagnosis_class, record.stratum):
+        label = _normalise_diagnosis(candidate)
+        if label is not None:
+            return label
+    return extra_labels.get(record.image_path.stem)
+
+
+def group_by_diagnosis(
+    records: Sequence[FundusRecord], extra_labels: dict[str, str]
+) -> tuple[dict[str, list[FundusRecord]], int]:
+    grouped: dict[str, list[FundusRecord]] = {
+        label: [] for label in DIAGNOSIS_CLASSES
+    }
+    unlabelled = 0
+    for record in records:
+        label = diagnosis_of(record, extra_labels)
+        if label is None:
+            unlabelled += 1
+        else:
+            grouped[label].append(record)
+    return grouped, unlabelled
+
+
+def _diagnosis_caps(
+    grouped_by_domain: dict[str, dict[str, list[FundusRecord]]],
+    balance: str,
+    sample: int | None,
+) -> dict[str, int | None]:
+    """How many images each (domain, class) subset may contribute.
+
+    Densities already make curves of different size comparable in *shape* — an
+    unequal draw does not bias where a curve sits, only how noisy it looks. What
+    balancing buys is that every curve carries the same sampling noise, so a
+    wobble in one cannot be mistaken for a real difference from another. The cost
+    is real: ``global`` throws away 329 of REFUGE's 360 non-glaucoma images to
+    match Drishti's 31, making every curve as noisy as the worst one.
+
+    ``per-class``
+        Each figure is internally balanced: every domain contributes the smallest
+        subset available for that class. The glaucoma and non-glaucoma figures
+        may still differ from each other.
+    ``global``
+        One cap across both classes, so all eight curves match.
+    ``off``
+        Use whatever ``--sample`` says, or everything.
+    """
+
+    sizes = {
+        label: [
+            len(grouped[label])
+            for grouped in grouped_by_domain.values()
+            if grouped[label]
+        ]
+        for label in DIAGNOSIS_CLASSES
+    }
+    if balance == "off":
+        return {label: sample for label in DIAGNOSIS_CLASSES}
+    if balance == "global":
+        every = [size for values in sizes.values() for size in values]
+        floor = min(every) if every else None
+        caps = {label: floor for label in DIAGNOSIS_CLASSES}
+    else:
+        caps = {
+            label: (min(values) if values else None)
+            for label, values in sizes.items()
+        }
+    if sample is not None:
+        caps = {
+            label: (sample if cap is None else min(cap, sample))
+            for label, cap in caps.items()
+        }
+    return caps
+
+
+
+def run_diagnosis_split(
+    args: argparse.Namespace,
+    config: Stage3LodoConfig,
+    records_by_domain: dict[Domain, Sequence[FundusRecord]],
+    output_dir: Path,
+    populations: Sequence[str],
+) -> tuple[list[Path], list[dict[str, object]], list[dict[str, object]]]:
+    """One overlay per diagnosis class, so the shift can be read within each."""
+
+    extra_labels = refuge_validation_labels(config, PROJECT_ROOT)
+    by_class: dict[str, list[DomainHistograms]] = {
+        label: [] for label in DIAGNOSIS_CLASSES
+    }
+    rows: list[dict[str, object]] = []
+    distances: list[dict[str, object]] = []
+
+    # Group every domain first: the balanced caps are a property of the whole
+    # split, so nothing can be scanned until all the subset sizes are known.
+    grouped_by_domain: dict[str, dict[str, list[FundusRecord]]] = {}
+    for domain in sorted(records_by_domain, key=lambda item: item.value):
+        records = records_by_domain[domain]
+        if args.limit is not None:
+            records = records[: args.limit]
+        grouped, unlabelled = group_by_diagnosis(records, extra_labels)
+        grouped_by_domain[domain.value] = grouped
+        if unlabelled:
+            print(
+                f"NOTE: {domain.value}: {unlabelled} of {len(records)} images "
+                "carry no diagnosis label and are left out of both figures",
+                flush=True,
+            )
+
+    caps = _diagnosis_caps(grouped_by_domain, args.balance_diagnosis, args.sample)
+    for label, cap in sorted(caps.items()):
+        if cap is not None:
+            print(f"balancing {label} to n={cap} per domain", flush=True)
+
+    for domain_name, grouped in grouped_by_domain.items():
+        for label in DIAGNOSIS_CLASSES:
+            subset = grouped[label]
+            available = len(subset)
+            if not subset:
+                print(
+                    f"NOTE: {domain_name} has no {label} images; it is absent "
+                    "from that figure",
+                    flush=True,
+                )
+                continue
+            cap = caps[label]
+            if cap is not None:
+                subset = sample_images(
+                    f"{domain_name}:{label}", subset, cap, args.sample_seed
+                )
+            print(
+                f"scanning {domain_name} {label}: {len(subset)} of {available} "
+                f"images at {args.working_size}px",
+                flush=True,
+            )
+            histogram = accumulate_domain(
+                domain_name, subset, args.working_size, args.workers
+            )
+            by_class[label].append(histogram)
+            rows.append(
+                {
+                    "domain": domain_name,
+                    "diagnosis": label,
+                    "images_available": available,
+                    "images_used": len(subset),
+                }
+            )
+
+    # The question is whether diagnosis moves the distribution as much as
+    # acquisition does. A within-domain comparison answers it directly and,
+    # unlike a distance to the pooled rest, does not depend on how the domains
+    # happen to be weighted against each other.
+    for population in populations:
+        for channel in (args.overlay_channel,):
+            paired = {
+                label: {h.domain: h for h in by_class[label]}
+                for label in DIAGNOSIS_CLASSES
+            }
+            for domain_name in sorted(paired[GLAUCOMA]):
+                if domain_name not in paired[NON_GLAUCOMA]:
+                    continue
+                distance = wasserstein_distance(
+                    paired[GLAUCOMA][domain_name].density(population, channel),
+                    paired[NON_GLAUCOMA][domain_name].density(population, channel),
+                )
+                distances.append(
+                    {
+                        "domain": domain_name,
+                        "population": population,
+                        "channel": channel,
+                        "wasserstein_1_glaucoma_vs_non": round(distance, 6),
+                    }
+                )
+
+    figure_paths: list[Path] = []
+    titles = {
+        GLAUCOMA: "Glaucoma images only",
+        NON_GLAUCOMA: "Non-glaucoma images only",
+    }
+    for label in DIAGNOSIS_CLASSES:
+        if not by_class[label]:
+            continue
+        for population in populations:
+            figure_paths.append(
+                plot_domain_overlay(
+                    by_class[label],
+                    output_dir / f"intensity_overlay_{population}_{label}.png",
+                    population=population,
+                    channel=args.overlay_channel,
+                    title=(
+                        f"{titles[label]}: pixel-intensity shift across domains "
+                        f"({args.overlay_channel}, {population} pixels)"
+                    ),
+                )
+            )
+    return figure_paths, rows, distances
+
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -821,6 +977,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Use only the first N images per domain (for a quick rehearsal)",
     )
     parser.add_argument(
+        "--sample",
+        type=int,
+        help=(
+            "Use a random sample of N images per domain instead of all of them, "
+            "so every domain contributes an equally noisy curve. Domains with "
+            "fewer than N images are used whole"
+        ),
+    )
+    parser.add_argument(
+        "--sample-seed",
+        type=int,
+        default=0,
+        help="Seed for --sample, so a sampled run can be reproduced exactly",
+    )
+    parser.add_argument(
         "--from-cache",
         action="store_true",
         help="Redraw figures from a previous scan's densities.npz without rescanning",
@@ -835,6 +1006,40 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--skip-geometry",
         action="store_true",
         help="Skip mask decoding and report only the intensity distributions",
+    )
+    parser.add_argument(
+        "--split-diagnosis",
+        action="store_true",
+        help=(
+            "Emit one domain overlay per diagnosis class (glaucoma and "
+            "non-glaucoma) instead of the pooled analysis"
+        ),
+    )
+    parser.add_argument(
+        "--balance-diagnosis",
+        choices=("off", "per-class", "global"),
+        default="off",
+        help=(
+            "Cap every domain's diagnosis subset to the smallest one, so the "
+            "curves carry equal sampling noise. 'per-class' balances within each "
+            "figure, 'global' uses one cap across both"
+        ),
+    )
+    parser.add_argument(
+        "--overlay-channel",
+        choices=CHANNELS,
+        default="gray",
+        help="Channel for the single-axes domain overlay figure",
+    )
+    parser.add_argument(
+        "--global-population",
+        choices=(*POPULATIONS, "both"),
+        default="fov",
+        help=(
+            "Pixel population for the per-domain global histograms. 'fov' is the "
+            "default because the black surround in 'all' puts a spike at zero "
+            "that flattens the tissue distribution on a linear axis"
+        ),
     )
     parser.add_argument(
         "--workers",
@@ -854,7 +1059,57 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"FATAL: {error}", file=sys.stderr)
         return 2
 
-    cache_path = args.output_dir.expanduser().resolve() / "densities.npz"
+    sampling = args.sample is not None
+    if sampling and args.output_dir == DEFAULT_OUTPUT_DIR:
+        # Keep the full-sweep artifacts intact: the W1 distances quoted in the
+        # write-up come from all 1,386 images, not from a sample.
+        args.output_dir = DEFAULT_OUTPUT_DIR.with_name(
+            f"{DEFAULT_OUTPUT_DIR.name}_sample{args.sample}"
+        )
+    if args.split_diagnosis:
+        if args.from_cache:
+            print(
+                "FATAL: --split-diagnosis needs a scan; the cache stores pooled "
+                "domains only",
+                file=sys.stderr,
+            )
+            return 2
+        output_dir = args.output_dir.expanduser().resolve()
+        populations = (
+            POPULATIONS
+            if args.global_population == "both"
+            else (args.global_population,)
+        )
+        try:
+            figure_paths, rows, distances = run_diagnosis_split(
+                args, config, records_by_domain, output_dir, populations
+            )
+        except (Stage3DataError, OSError, ValueError) as error:
+            print(f"FATAL: {error}", file=sys.stderr)
+            return 2
+        counts_path = _write_csv(output_dir / "diagnosis_split_counts.csv", rows)
+        distance_path = _write_csv(
+            output_dir / "diagnosis_within_domain_distance.csv", distances
+        )
+        print()
+        print("within-domain glaucoma vs non-glaucoma (W1), for scale against")
+        print("the between-domain distances in the pooled run:")
+        for row in distances:
+            print(
+                f"  {row['domain']:18s} {row['population']}/{row['channel']}"
+                f"  {row['wasserstein_1_glaucoma_vs_non']:.4f}"
+            )
+        print()
+        for path in (*figure_paths, counts_path, distance_path):
+            print(f"wrote {path}")
+        return 0
+
+    cache_name = (
+        f"densities_sample{args.sample}_seed{args.sample_seed}.npz"
+        if sampling
+        else "densities.npz"
+    )
+    cache_path = args.output_dir.expanduser().resolve() / cache_name
     histograms: list[DomainHistograms] = []
     geometry: dict[str, dict[str, np.ndarray]] = {}
     if args.from_cache:
@@ -869,6 +1124,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         records = records_by_domain[domain]
         if args.limit is not None:
             records = records[: args.limit]
+        if sampling:
+            available = len(records)
+            records = sample_images(
+                domain.value, records, args.sample, args.sample_seed
+            )
+            if available < args.sample:
+                print(
+                    f"NOTE: {domain.value} has only {available} images, "
+                    f"fewer than the requested sample of {args.sample}",
+                    flush=True,
+                )
         print(
             f"scanning {domain.value}: {len(records)} images "
             f"at {args.working_size}px with {args.workers} workers",
@@ -888,6 +1154,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = build_report(histograms)
     report["method"]["working_size"] = args.working_size  # type: ignore[index]
     report["method"]["image_limit"] = args.limit  # type: ignore[index]
+    report["method"]["sample_per_domain"] = args.sample  # type: ignore[index]
+    report["method"]["sample_seed"] = (  # type: ignore[index]
+        args.sample_seed if sampling else None
+    )
 
     if geometry:
         report["geometry"] = {
@@ -922,6 +1192,43 @@ def main(argv: Sequence[str] | None = None) -> int:
     distance_figure_path = plot_leave_one_out_distance(
         histograms, output_dir / "leave_one_out_distance.png"
     )
+    global_populations = (
+        POPULATIONS
+        if args.global_population == "both"
+        else (args.global_population,)
+    )
+    global_figure_paths = [
+        plot_global_histogram(
+            histogram,
+            output_dir / f"global_histogram_{histogram.domain}_{population}.png",
+            population=population,
+        )
+        for population in global_populations
+        for histogram in sorted(histograms, key=lambda item: item.domain)
+    ]
+    overlay_figure_paths = []
+    for population in global_populations:
+        # Distance from each domain to the pooled other three, so the legend
+        # says how far apart the curves are rather than leaving it to the eye.
+        annotations = {}
+        for histogram in histograms:
+            others = [item for item in histograms if item is not histogram]
+            if not others:
+                continue
+            rest = pooled_density(others, population, args.overlay_channel)
+            distance = wasserstein_distance(
+                histogram.density(population, args.overlay_channel), rest
+            )
+            annotations[histogram.domain] = f"W\u2081 to rest {distance:.4f}"
+        overlay_figure_paths.append(
+            plot_domain_overlay(
+                histograms,
+                output_dir / f"intensity_overlay_{population}.png",
+                population=population,
+                channel=args.overlay_channel,
+                annotations=annotations,
+            )
+        )
     report_path = _write_json(output_dir / "domain_shift.json", report)
     summary_path = _write_csv(
         output_dir / "domain_intensity_summary.csv", _summary_rows(report)
@@ -1013,6 +1320,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     print()
     for path in (
         *bar_figure_paths,
+        *global_figure_paths,
+        *overlay_figure_paths,
         figure_path,
         distance_figure_path,
         geometry_figure_path,

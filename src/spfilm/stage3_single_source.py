@@ -62,8 +62,25 @@ class Stage3SingleSourceConfig:
     brightness_contrast: float
     requested_device: str
 
+    @property
+    def held_out_domains(self) -> tuple[Domain, ...]:
+        """The same configured domain list, named for the LODO arm.
+
+        The fixed-budget train-on-three arm rotates each domain through the
+        held-out role; the train-on-one arm rotates each through the source role.
+        The list is identical, so one config field backs both and the two arms
+        cannot drift onto different domain sets.
+        """
+
+        return self.source_domains
+
     @classmethod
-    def from_json(cls, config_path: str | Path) -> "Stage3SingleSourceConfig":
+    def from_json(
+        cls,
+        config_path: str | Path,
+        expected_stage: str = "single_source",
+        domains_key: str = "source_domains",
+    ) -> "Stage3SingleSourceConfig":
         config_path = Path(config_path).expanduser().resolve()
         try:
             payload = json.loads(config_path.read_text(encoding="utf-8"))
@@ -75,9 +92,10 @@ class Stage3SingleSourceConfig:
             raise Stage3ConfigError(
                 "Stage 3 single-source config must be a JSON object"
             )
-        if payload.get("stage") != "single_source":
+        if payload.get("stage") != expected_stage:
             raise Stage3ConfigError(
-                "Stage 3 single-source config must set stage='single_source'"
+                f"Stage 3 config must set stage={expected_stage!r}, got "
+                f"{payload.get('stage')!r}"
             )
         if payload.get("arm") != "plain":
             raise Stage3ConfigError(
@@ -89,16 +107,16 @@ class Stage3SingleSourceConfig:
             raise Stage3ConfigError(
                 "protocol.source_test_policy must be 'exclude'"
             )
-        raw_sources = protocol.get("source_domains")
+        raw_sources = protocol.get(domains_key)
         if not isinstance(raw_sources, list) or not raw_sources:
             raise Stage3ConfigError(
-                "protocol.source_domains must be a non-empty array"
+                f"protocol.{domains_key} must be a non-empty array"
             )
         source_domains = tuple(
-            _domain(value, "protocol.source_domains") for value in raw_sources
+            _domain(value, f"protocol.{domains_key}") for value in raw_sources
         )
         if len(source_domains) != len(set(source_domains)):
-            raise Stage3ConfigError("protocol.source_domains contains duplicates")
+            raise Stage3ConfigError(f"protocol.{domains_key} contains duplicates")
 
         raw_seeds = protocol.get("seeds")
         if not isinstance(raw_seeds, list) or not raw_seeds:
