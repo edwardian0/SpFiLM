@@ -12,7 +12,7 @@
 #SBATCH --output=/users/k23123868/edward/logs/fixed_s3_%j.out
 #SBATCH --error=/users/k23123868/edward/logs/fixed_s3_%j.err
 #SBATCH --constraint="a100|a40|a30|l40s|h100"
-#SBATCH --exclude=erc-hpc-comp[048,054,170-175,177,178,196,235-239,242,252,253]
+#SBATCH --exclude=erc-hpc-comp[048,050,054,170-175,177,178,196,235-239,242,252,253]
 #
 # Stage 3 fixed-budget LODO: train on three domains, test on the fourth.
 # 120 train / 30 val / 50 test - paired with the train-on-one arm on identical test sets.
