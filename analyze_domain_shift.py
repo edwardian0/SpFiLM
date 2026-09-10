@@ -824,6 +824,153 @@ def _diagnosis_caps(
 
 
 
+def _diagnosis_artifacts(
+    args: argparse.Namespace,
+    histograms: Sequence[DomainHistograms],
+    geometry: dict[str, dict[str, np.ndarray]],
+    output_dir: Path,
+    label: str,
+    populations: Sequence[str],
+) -> list[Path]:
+    """Write, for one diagnosis class, everything the pooled run writes.
+
+    The split used to emit one overlay per class in a single channel. That is
+    enough to answer "does diagnosis move the curve", but not "does it move the
+    curve the same way in every channel", which is the question the RGB input
+    actually poses. Producing the full artifact family per class puts the two
+    subsets on the same footing as the pooled domains, so a distance read from
+    one directory means the same thing as a distance read from the other.
+
+    The single-channel overlay keeps its original filename as well as gaining a
+    channel-qualified one: existing write-ups cite the old path.
+    """
+
+    report = build_report(histograms)
+    report["method"]["working_size"] = args.working_size  # type: ignore[index]
+    report["method"]["image_limit"] = args.limit  # type: ignore[index]
+    report["method"]["sample_per_domain"] = args.sample  # type: ignore[index]
+    report["method"]["sample_seed"] = args.sample_seed  # type: ignore[index]
+    report["method"]["diagnosis"] = label  # type: ignore[index]
+    report["method"]["balance_diagnosis"] = args.balance_diagnosis  # type: ignore[index]
+    if geometry:
+        report["geometry"] = {
+            domain: {
+                field: _distribution(values[field])
+                for field in (*GEOMETRY_FIELDS, "aspect_ratio", "long_edge_pixels")
+            }
+            for domain, values in sorted(geometry.items())
+        }
+
+    written: list[Path] = [
+        save_densities(histograms, output_dir / f"densities_{label}.npz", geometry),
+        _write_json(output_dir / f"domain_shift_{label}.json", report),
+        _write_csv(
+            output_dir / f"domain_intensity_summary_{label}.csv",
+            _summary_rows(report),
+        ),
+        _write_csv(
+            output_dir / f"domain_pairwise_distances_{label}.csv",
+            [
+                {
+                    key: (round(value, 6) if isinstance(value, float) else value)
+                    for key, value in row.items()
+                }
+                for row in report["pairwise_distances"]  # type: ignore[union-attr]
+            ],
+        ),
+        _write_csv(
+            output_dir / f"domain_leave_one_out_distances_{label}.csv",
+            [
+                {
+                    key: (round(value, 6) if isinstance(value, float) else value)
+                    for key, value in row.items()
+                }
+                for row in report["leave_one_out_distances"]  # type: ignore[union-attr]
+            ],
+        ),
+        plot_histograms(
+            histograms, output_dir / f"intensity_histograms_{label}.png"
+        ),
+        plot_leave_one_out_distance(
+            histograms, output_dir / f"leave_one_out_distance_{label}.png"
+        ),
+    ]
+    written.extend(
+        plot_histogram_bars(
+            histograms,
+            output_dir / f"intensity_histograms_bars_{population}_{label}.png",
+            population,
+            bins=args.bars,
+        )
+        for population in POPULATIONS
+    )
+    written.extend(
+        plot_global_histogram(
+            histogram,
+            output_dir
+            / f"global_histogram_{histogram.domain}_{population}_{label}.png",
+            population=population,
+        )
+        for population in populations
+        for histogram in sorted(histograms, key=lambda item: item.domain)
+    )
+
+    titles = {
+        GLAUCOMA: "Glaucoma images only",
+        NON_GLAUCOMA: "Non-glaucoma images only",
+    }
+    for population in populations:
+        for channel in CHANNELS:
+            annotations = {}
+            for histogram in histograms:
+                others = [item for item in histograms if item is not histogram]
+                if not others:
+                    continue
+                rest = pooled_density(others, population, channel)
+                annotations[histogram.domain] = (
+                    "W₁ to rest "
+                    f"{wasserstein_distance(histogram.density(population, channel), rest):.4f}"
+                )
+            title = (
+                f"{titles[label]}: pixel-intensity shift across domains "
+                f"({channel}, {population} pixels)"
+            )
+            paths = [output_dir / f"intensity_overlay_{population}_{channel}_{label}.png"]
+            if channel == args.overlay_channel:
+                paths.append(output_dir / f"intensity_overlay_{population}_{label}.png")
+            written.extend(
+                plot_domain_overlay(
+                    histograms,
+                    path,
+                    population=population,
+                    channel=channel,
+                    annotations=annotations,
+                    title=title,
+                )
+                for path in paths
+            )
+
+    if geometry:
+        written.append(
+            plot_geometry(geometry, output_dir / f"structure_scale_{label}.png")
+        )
+        written.append(
+            _write_csv(
+                output_dir / f"domain_structure_scale_{label}.csv",
+                [
+                    {
+                        "domain": domain,
+                        "field": field,
+                        **{name: round(value, 6) for name, value in statistics.items()},
+                    }
+                    for domain, fields in sorted(report["geometry"].items())  # type: ignore[union-attr]
+                    for field, statistics in fields.items()
+                ],
+            )
+        )
+    return written
+
+
 def run_diagnosis_split(
     args: argparse.Namespace,
     config: Stage3LodoConfig,
@@ -836,6 +983,9 @@ def run_diagnosis_split(
     extra_labels = refuge_validation_labels(config, PROJECT_ROOT)
     by_class: dict[str, list[DomainHistograms]] = {
         label: [] for label in DIAGNOSIS_CLASSES
+    }
+    geometry_by_class: dict[str, dict[str, dict[str, np.ndarray]]] = {
+        label: {} for label in DIAGNOSIS_CLASSES
     }
     rows: list[dict[str, object]] = []
     distances: list[dict[str, object]] = []
@@ -886,6 +1036,11 @@ def run_diagnosis_split(
                 domain_name, subset, args.working_size, args.workers
             )
             by_class[label].append(histogram)
+            if not args.skip_geometry:
+                print(f"measuring {domain_name} {label} mask geometry", flush=True)
+                geometry_by_class[label][domain_name] = accumulate_geometry(
+                    domain_name, subset, args.workers
+                )
             rows.append(
                 {
                     "domain": domain_name,
@@ -898,9 +1053,11 @@ def run_diagnosis_split(
     # The question is whether diagnosis moves the distribution as much as
     # acquisition does. A within-domain comparison answers it directly and,
     # unlike a distance to the pooled rest, does not depend on how the domains
-    # happen to be weighted against each other.
+    # happen to be weighted against each other. It is reported per channel
+    # because a diagnosis that shifted only one channel would be invisible in
+    # the luminance projection, which weights green at 0.587.
     for population in populations:
-        for channel in (args.overlay_channel,):
+        for channel in CHANNELS:
             paired = {
                 label: {h.domain: h for h in by_class[label]}
                 for label in DIAGNOSIS_CLASSES
@@ -922,26 +1079,19 @@ def run_diagnosis_split(
                 )
 
     figure_paths: list[Path] = []
-    titles = {
-        GLAUCOMA: "Glaucoma images only",
-        NON_GLAUCOMA: "Non-glaucoma images only",
-    }
     for label in DIAGNOSIS_CLASSES:
         if not by_class[label]:
             continue
-        for population in populations:
-            figure_paths.append(
-                plot_domain_overlay(
-                    by_class[label],
-                    output_dir / f"intensity_overlay_{population}_{label}.png",
-                    population=population,
-                    channel=args.overlay_channel,
-                    title=(
-                        f"{titles[label]}: pixel-intensity shift across domains "
-                        f"({args.overlay_channel}, {population} pixels)"
-                    ),
-                )
+        figure_paths.extend(
+            _diagnosis_artifacts(
+                args,
+                by_class[label],
+                geometry_by_class[label],
+                output_dir,
+                label,
+                populations,
             )
+        )
     return figure_paths, rows, distances
 
 
@@ -1094,11 +1244,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         print()
         print("within-domain glaucoma vs non-glaucoma (W1), for scale against")
         print("the between-domain distances in the pooled run:")
+        print(f"  {'domain':18s}" + "".join(f"{channel:>9s}" for channel in CHANNELS))
+        by_domain: dict[str, dict[str, float]] = {}
         for row in distances:
-            print(
-                f"  {row['domain']:18s} {row['population']}/{row['channel']}"
-                f"  {row['wasserstein_1_glaucoma_vs_non']:.4f}"
+            if row["population"] != "fov":
+                continue
+            by_domain.setdefault(str(row["domain"]), {})[str(row["channel"])] = float(
+                row["wasserstein_1_glaucoma_vs_non"]
             )
+        for domain_name, channels in sorted(by_domain.items()):
+            print(
+                f"  {domain_name:18s}"
+                + "".join(f"{channels.get(channel, float('nan')):9.4f}" for channel in CHANNELS)
+            )
+        print("  (fov pixels; the full table, both populations, is in the CSV)")
         print()
         for path in (*figure_paths, counts_path, distance_path):
             print(f"wrote {path}")
@@ -1208,27 +1367,38 @@ def main(argv: Sequence[str] | None = None) -> int:
     ]
     overlay_figure_paths = []
     for population in global_populations:
-        # Distance from each domain to the pooled other three, so the legend
-        # says how far apart the curves are rather than leaving it to the eye.
-        annotations = {}
-        for histogram in histograms:
-            others = [item for item in histograms if item is not histogram]
-            if not others:
-                continue
-            rest = pooled_density(others, population, args.overlay_channel)
-            distance = wasserstein_distance(
-                histogram.density(population, args.overlay_channel), rest
+        # One overlay per channel, because the network is fed RGB and the
+        # luminance projection can hide a channel-specific gap: two domains
+        # whose gray curves coincide may still be several times further apart
+        # in red or blue, and luma weights green at 0.587 so a red-and-blue
+        # disagreement can cancel out of it entirely.
+        for channel in CHANNELS:
+            # Distance from each domain to the pooled other three, so the legend
+            # says how far apart the curves are rather than leaving it to the eye.
+            annotations = {}
+            for histogram in histograms:
+                others = [item for item in histograms if item is not histogram]
+                if not others:
+                    continue
+                rest = pooled_density(others, population, channel)
+                distance = wasserstein_distance(
+                    histogram.density(population, channel), rest
+                )
+                annotations[histogram.domain] = f"W\u2081 to rest {distance:.4f}"
+            paths = [output_dir / f"intensity_overlay_{population}_{channel}.png"]
+            if channel == args.overlay_channel:
+                # The unqualified name is cited by the write-ups; keep it.
+                paths.append(output_dir / f"intensity_overlay_{population}.png")
+            overlay_figure_paths.extend(
+                plot_domain_overlay(
+                    histograms,
+                    path,
+                    population=population,
+                    channel=channel,
+                    annotations=annotations,
+                )
+                for path in paths
             )
-            annotations[histogram.domain] = f"W\u2081 to rest {distance:.4f}"
-        overlay_figure_paths.append(
-            plot_domain_overlay(
-                histograms,
-                output_dir / f"intensity_overlay_{population}.png",
-                population=population,
-                channel=args.overlay_channel,
-                annotations=annotations,
-            )
-        )
     report_path = _write_json(output_dir / "domain_shift.json", report)
     summary_path = _write_csv(
         output_dir / "domain_intensity_summary.csv", _summary_rows(report)

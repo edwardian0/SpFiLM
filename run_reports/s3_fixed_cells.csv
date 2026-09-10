@@ -1,0 +1,33 @@
+kind,held_out_domain,structure,test_images,hd95_unit,hd95_excluded_total,dice_mean,dice_seed_std,dice_ci_low,dice_ci_high,iou_mean,iou_seed_std,iou_ci_low,iou_ci_high,hd95_mean,hd95_seed_std,hd95_ci_low,hd95_ci_high,arm_a,arm_b,dice_mean_a,dice_mean_b,mean_difference,median_difference,method,statistic,p_value,p_adjusted,significant
+domain_summary,drishti_gs,disc,50,letterboxed-grid pixels,0,0.785255,0.0386083,0.737316,0.833194,0.687155,0.0433409,0.63334,0.74097,67.4383,33.3005,26.0903,108.786,,,,,,,,,,,
+domain_summary,drishti_gs,cup,50,letterboxed-grid pixels,0,0.646088,0.0432193,0.592424,0.699752,0.495127,0.0508094,0.432039,0.558216,24.9263,6.53575,16.8111,33.0415,,,,,,,,,,,
+domain_summary,refuge_canon_val,disc,50,letterboxed-grid pixels,0,0.837014,0.0487471,0.776487,0.897542,0.75001,0.056449,0.679919,0.8201,44.7499,19.2221,20.8825,68.6173,,,,,,,,,,,
+domain_summary,refuge_canon_val,cup,50,letterboxed-grid pixels,0,0.648628,0.064959,0.567971,0.729285,0.507141,0.0711448,0.418803,0.595479,22.9268,9.52455,11.1005,34.7531,,,,,,,,,,,
+domain_summary,refuge_zeiss,disc,50,letterboxed-grid pixels,0,0.821246,0.0207084,0.795533,0.846959,0.727498,0.0224142,0.699667,0.755329,34.4941,9.23086,23.0324,45.9557,,,,,,,,,,,
+domain_summary,refuge_zeiss,cup,50,letterboxed-grid pixels,0,0.572941,0.0110128,0.559267,0.586615,0.418417,0.0103203,0.405602,0.431231,25.6995,4.32938,20.3239,31.0751,,,,,,,,,,,
+domain_summary,rim_one_dl,disc,50,native pixels,0,0.0736861,0.0414727,0.0221909,0.125181,0.0390713,0.0231552,0.0103204,0.0678222,176.767,12.3553,161.426,192.109,,,,,,,,,,,
+domain_summary,rim_one_dl,cup,50,native pixels,4,0.0173578,0.0140162,-4.55333e-05,0.0347612,0.00927673,0.0076217,-0.000186856,0.0187403,215.97,28.8188,180.186,251.753,,,,,,,,,,,
+paired_test,drishti_gs,disc,50,,,,,,,,,,,,,,,single_refuge_canon_val,pooled_120,0.879274,0.785255,-0.0940188,-0.0521165,wilcoxon,182,3.00675e-06,2.70607e-05,True
+paired_test,drishti_gs,disc,50,,,,,,,,,,,,,,,single_refuge_zeiss,pooled_120,0.727259,0.785255,0.0579965,0.0580014,wilcoxon,278,0.000352222,0.00246555,True
+paired_test,drishti_gs,disc,50,,,,,,,,,,,,,,,single_rim_one_dl,pooled_120,0.12067,0.785255,0.664585,0.71907,wilcoxon,0,1.77636e-15,4.26326e-14,True
+paired_test,drishti_gs,cup,50,,,,,,,,,,,,,,,single_refuge_canon_val,pooled_120,0.703331,0.646088,-0.0572432,-0.0585933,wilcoxon,256,0.000136287,0.00109029,True
+paired_test,drishti_gs,cup,50,,,,,,,,,,,,,,,single_refuge_zeiss,pooled_120,0.474512,0.646088,0.171576,0.144716,wilcoxon,28,2.63434e-12,4.47837e-11,True
+paired_test,drishti_gs,cup,50,,,,,,,,,,,,,,,single_rim_one_dl,pooled_120,0.415684,0.646088,0.230404,0.215781,wilcoxon,45,2.9944e-11,4.79105e-10,True
+paired_test,refuge_canon_val,disc,50,,,,,,,,,,,,,,,single_drishti_gs,pooled_120,0.858207,0.837014,-0.0211929,-0.000166231,wilcoxon,467,0.10111,0.404439,False
+paired_test,refuge_canon_val,disc,50,,,,,,,,,,,,,,,single_refuge_zeiss,pooled_120,0.732706,0.837014,0.104308,0.0585629,wilcoxon,125,6.71004e-08,8.72306e-07,True
+paired_test,refuge_canon_val,disc,50,,,,,,,,,,,,,,,single_rim_one_dl,pooled_120,0.0885928,0.837014,0.748421,0.791778,wilcoxon,0,1.77636e-15,4.26326e-14,True
+paired_test,refuge_canon_val,cup,50,,,,,,,,,,,,,,,single_drishti_gs,pooled_120,0.666112,0.648628,-0.0174839,-0.0166486,wilcoxon,477,0.123169,0.404439,False
+paired_test,refuge_canon_val,cup,50,,,,,,,,,,,,,,,single_refuge_zeiss,pooled_120,0.669624,0.648628,-0.0209959,-0.0487651,wilcoxon,470,0.107376,0.404439,False
+paired_test,refuge_canon_val,cup,50,,,,,,,,,,,,,,,single_rim_one_dl,pooled_120,0.157591,0.648628,0.491037,0.519947,wilcoxon,0,1.77636e-15,4.26326e-14,True
+paired_test,refuge_zeiss,disc,50,,,,,,,,,,,,,,,single_drishti_gs,pooled_120,0.837166,0.821246,-0.0159205,-0.0127786,wilcoxon,172,1.64553e-06,1.64553e-05,True
+paired_test,refuge_zeiss,disc,50,,,,,,,,,,,,,,,single_refuge_canon_val,pooled_120,0.891311,0.821246,-0.070065,-0.0499955,wilcoxon,48,4.38067e-11,6.13294e-10,True
+paired_test,refuge_zeiss,disc,50,,,,,,,,,,,,,,,single_rim_one_dl,pooled_120,0.0789074,0.821246,0.742338,0.804577,wilcoxon,1,3.55271e-15,7.10543e-14,True
+paired_test,refuge_zeiss,cup,50,,,,,,,,,,,,,,,single_drishti_gs,pooled_120,0.559753,0.572941,0.0131877,0.0152896,wilcoxon,400,0.0212237,0.106118,False
+paired_test,refuge_zeiss,cup,50,,,,,,,,,,,,,,,single_refuge_canon_val,pooled_120,0.760113,0.572941,-0.187172,-0.210676,wilcoxon,46,3.40368e-11,5.10552e-10,True
+paired_test,refuge_zeiss,cup,50,,,,,,,,,,,,,,,single_rim_one_dl,pooled_120,0.164,0.572941,0.408941,0.410547,wilcoxon,0,1.77636e-15,4.26326e-14,True
+paired_test,rim_one_dl,disc,50,,,,,,,,,,,,,,,single_drishti_gs,pooled_120,0.104289,0.0736861,-0.0306028,-0.0264621,wilcoxon,16,3.00204e-13,5.40368e-12,True
+paired_test,rim_one_dl,disc,50,,,,,,,,,,,,,,,single_refuge_canon_val,pooled_120,0.070951,0.0736861,0.00273504,0.00110126,wilcoxon,551,0.409704,0.409704,False
+paired_test,rim_one_dl,disc,50,,,,,,,,,,,,,,,single_refuge_zeiss,pooled_120,0.0825764,0.0736861,-0.00889033,-0.00591369,wilcoxon,343,0.00391331,0.0234799,True
+paired_test,rim_one_dl,cup,50,,,,,,,,,,,,,,,single_drishti_gs,pooled_120,0.133077,0.0173578,-0.11572,-0.0856034,wilcoxon,3,8.88178e-15,1.68754e-13,True
+paired_test,rim_one_dl,cup,50,,,,,,,,,,,,,,,single_refuge_canon_val,pooled_120,0.0772939,0.0173578,-0.059936,-0.0347168,wilcoxon,146,3.04124e-07,3.64948e-06,True
+paired_test,rim_one_dl,cup,50,,,,,,,,,,,,,,,single_refuge_zeiss,pooled_120,0.057423,0.0173578,-0.0400652,-0.0176675,wilcoxon,165,1.06331e-06,1.16964e-05,True

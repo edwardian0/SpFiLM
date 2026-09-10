@@ -11,6 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from PIL import Image
 
 from .data import FundusRecord, FundusSegmentationDataset
 
@@ -161,3 +162,149 @@ def save_prediction_gallery(
     plt.close(figure)
     return output_path
 
+
+
+# --- Native-resolution prediction overlays -------------------------------------
+#
+# `save_prediction_gallery` above draws the letterboxed network input. The helpers
+# below invert that letterbox so a prediction can be drawn on the original image at
+# its own resolution. They are a separate path on purpose: training still calls the
+# gallery, and the two must not drift into each other.
+
+
+def letterbox_geometry(
+    native_size: tuple[int, int], image_size: int
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return ``(resized_wh, offset_xy)`` for ``data._resize_and_pad``.
+
+    This mirrors that function's arithmetic exactly rather than reading the
+    ``letterbox_scale`` the dataset reports, so rounding cannot differ between the
+    forward and inverse transform. Both tuples are in PIL ``(x, y)`` order; numpy
+    indexing needs them swapped.
+    """
+
+    width, height = native_size
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Native size must be positive, got {native_size}")
+    scale = image_size / max(width, height)
+    resized = (max(1, round(width * scale)), max(1, round(height * scale)))
+    offset = ((image_size - resized[0]) // 2, (image_size - resized[1]) // 2)
+    return resized, offset
+
+
+def invert_letterbox(
+    masks: np.ndarray, native_size: tuple[int, int], image_size: int
+) -> np.ndarray:
+    """Map letterboxed ``[C, S, S]`` binary masks back onto the native image grid.
+
+    Nearest-neighbour throughout: bilinear on a binary mask yields fractional
+    values and a contour that drifts by a pixel or two.
+    """
+
+    masks = np.asarray(masks)
+    if masks.ndim != 3 or masks.shape[1] != image_size or masks.shape[2] != image_size:
+        raise ValueError(
+            f"Expected [C, {image_size}, {image_size}] masks, got {masks.shape}"
+        )
+    (resized_width, resized_height), (offset_x, offset_y) = letterbox_geometry(
+        native_size, image_size
+    )
+    width, height = native_size
+    native = np.zeros((masks.shape[0], height, width), dtype=bool)
+    for channel in range(masks.shape[0]):
+        cropped = masks[channel].astype(bool)[
+            offset_y : offset_y + resized_height,
+            offset_x : offset_x + resized_width,
+        ]
+        native[channel] = (
+            np.asarray(
+                Image.fromarray(cropped.astype(np.uint8) * 255, mode="L").resize(
+                    (width, height), Image.Resampling.NEAREST
+                )
+            )
+            > 127
+        )
+    return native
+
+
+def thicken(mask: np.ndarray, width: int) -> np.ndarray:
+    """Dilate a 1px contour so it survives being drawn at figure scale.
+
+    A native fundus image can be 2000px wide inside a 7in axis; an undilated
+    contour disappears into resampling.
+    """
+
+    grown = np.asarray(mask, dtype=bool)
+    for _ in range(max(0, width - 1)):
+        expanded = grown.copy()
+        expanded[1:, :] |= grown[:-1, :]
+        expanded[:-1, :] |= grown[1:, :]
+        expanded[:, 1:] |= grown[:, :-1]
+        expanded[:, :-1] |= grown[:, 1:]
+        grown = expanded
+    return grown
+
+
+def overlay_contours(
+    image: np.ndarray,
+    masks: np.ndarray,
+    colors: Sequence[tuple[float, float, float]],
+    contour_width: int = 1,
+) -> np.ndarray:
+    """Paint each mask's boundary onto ``image`` in the matching colour.
+
+    The colourless generalisation of ``_overlay``: same ``_boundary``, but the
+    caller picks the palette so ground truth and prediction can share one panel.
+    """
+
+    overlay = np.clip(np.asarray(image, dtype=np.float32).copy(), 0, 1)
+    if len(colors) != len(masks):
+        raise ValueError(f"Need one colour per mask, got {len(colors)}/{len(masks)}")
+    for mask, color in zip(masks, colors):
+        overlay[thicken(_boundary(mask), contour_width)] = color
+    return overlay
+
+
+def overlay_regions(
+    image: np.ndarray,
+    masks: np.ndarray,
+    colors: Sequence[tuple[float, float, float]],
+    alpha: float = 0.4,
+    contour_width: int = 0,
+) -> np.ndarray:
+    """Alpha-blend filled mask regions onto ``image``, optionally edged.
+
+    Contours show where a boundary sits; a filled region shows how much area a
+    prediction claims, which is what makes a scale error read at a glance. Masks
+    are painted in order, so a cup drawn after its disc sits on top of it.
+    """
+
+    if not 0.0 <= alpha <= 1.0:
+        raise ValueError(f"alpha must be in [0, 1], got {alpha}")
+    overlay = np.clip(np.asarray(image, dtype=np.float32).copy(), 0, 1)
+    if len(colors) != len(masks):
+        raise ValueError(f"Need one colour per mask, got {len(colors)}/{len(masks)}")
+    for mask, color in zip(masks, colors):
+        selected = np.asarray(mask, dtype=bool)
+        overlay[selected] = (1.0 - alpha) * overlay[selected] + alpha * np.asarray(
+            color, dtype=np.float32
+        )
+    if contour_width:
+        for mask, color in zip(masks, colors):
+            overlay[thicken(_boundary(mask), contour_width)] = color
+    return overlay
+
+
+def binary_mask_image(masks: np.ndarray, colors: Sequence) -> np.ndarray:
+    """Render masks as flat colour on black -- the segmentation with no fundus.
+
+    Stripping the image away is the honest way to compare two shapes: nothing of
+    the retina is left to flatter or excuse the mask's outline.
+    """
+
+    if len(colors) != len(masks):
+        raise ValueError(f"Need one colour per mask, got {len(colors)}/{len(masks)}")
+    canvas = np.zeros((*np.asarray(masks[0]).shape, 3), dtype=np.float32)
+    for mask, color in zip(masks, colors):
+        canvas[np.asarray(mask, dtype=bool)] = color
+    return canvas
