@@ -10,6 +10,7 @@ padding exists to get wrong.
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -141,6 +142,56 @@ class ContourDrawingTests(unittest.TestCase):
                 np.zeros((2, 8, 8), dtype=bool),
                 [(1.0, 0.0, 0.0)],
             )
+
+
+class PathResolutionTests(unittest.TestCase):
+    """The manifest records absolute paths from the machine that produced the run.
+
+    This script is meant to run both on CREATE, where those paths still resolve,
+    and on a laptop, where they do not. The resolution order is what makes one
+    manifest work in both places.
+    """
+
+    def setUp(self) -> None:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from visualize_predictions import VisualizationError, _remap
+
+        self.remap = _remap
+        self.error = VisualizationError
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.addCleanup(self._temporary.cleanup)
+
+    def _make(self, relative: str) -> Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+        return path
+
+    def test_prefers_the_recorded_path_when_it_resolves(self) -> None:
+        """The CREATE case: the manifest path is already correct."""
+
+        recorded = self._make("datasets/REFUGE/img.jpg")
+        self.assertEqual(self.remap(str(recorded), None), recorded)
+
+    def test_falls_back_to_rewriting_onto_a_local_root(self) -> None:
+        """The laptop case: the recorded path does not exist here."""
+
+        local = self._make("local/REFUGE/img.jpg")
+        recorded = "/cephfs/volumes/hpc_data_prj/xyz/datasets/REFUGE/img.jpg"
+        self.assertEqual(self.remap(recorded, self.root / "local"), local)
+
+    def test_explicit_root_does_not_fall_back_to_the_manifest(self) -> None:
+        """An explicit --data-root must not be silently overridden."""
+
+        recorded = self._make("datasets/REFUGE/img.jpg")
+        with self.assertRaises(self.error):
+            self.remap(str(recorded), self.root / "elsewhere")
+
+    def test_error_names_every_location_tried(self) -> None:
+        with self.assertRaises(self.error) as caught:
+            self.remap("/cephfs/xyz/datasets/REFUGE/missing.jpg", None)
+        self.assertIn("tried:", str(caught.exception))
 
 
 class FilledRegionTests(unittest.TestCase):

@@ -572,6 +572,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     config_path = args.config.expanduser().resolve()
     try:
         config = Stage3SingleSourceConfig.from_json(config_path)
+        if config.arm != "plain":
+            # One source domain means one code; a conditioned train-on-one arm
+            # would learn nothing the plain arm does not.
+            raise Stage3ConfigError(
+                "The train-on-one arm only supports arm='plain', got "
+                f"{config.arm!r}"
+            )
         if args.command == "prepare":
             return prepare(config, args.force)
         if args.command == "check":

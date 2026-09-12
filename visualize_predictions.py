@@ -51,6 +51,7 @@ from spfilm.visualization import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_DATA_ROOT = REPO_ROOT / "datasets"
 DATASET_MARKER = "/datasets/"
 
 # Ground truth keeps the house palette from `_overlay`; the prediction gets a
@@ -131,28 +132,39 @@ def _describe_cell(run_dir: Path, target_domain: str | None) -> tuple[str, str]:
 # --- Manifest ------------------------------------------------------------------
 
 
-def _remap(path_text: str, data_root: Path) -> Path:
-    """Rewrite a CREATE dataset path onto the local dataset root."""
+def _remap(path_text: str, data_root: Path | None) -> Path:
+    """Resolve a manifest path against wherever the data actually is.
 
+    Manifests record absolute paths from the machine that produced the run. On
+    CREATE those are still correct; on a laptop they need rewriting onto the local
+    dataset root. Trying the recorded path first lets one manifest work in both
+    places, which matters because this script is meant to run either locally on
+    pulled checkpoints or on CREATE itself.
+
+    An explicit --data-root suppresses that: if the caller says where the data is,
+    silently falling back to a path baked into the manifest would hide the mistake.
+    """
+
+    candidates: list[Path] = []
+    if data_root is None:
+        candidates.append(Path(path_text))
     index = path_text.find(DATASET_MARKER)
-    if index == -1:
-        candidate = Path(path_text)
+    if index != -1:
+        root = data_root if data_root is not None else DEFAULT_DATA_ROOT
+        candidates.append(root / path_text[index + len(DATASET_MARKER) :])
+    for candidate in candidates:
         if candidate.is_file():
             return candidate
-        raise VisualizationError(
-            f"Path has no {DATASET_MARKER!r} segment to remap and does not exist "
-            f"locally: {path_text}"
-        )
-    resolved = data_root / path_text[index + len(DATASET_MARKER) :]
-    if not resolved.is_file():
-        raise VisualizationError(
-            f"Missing local file: {resolved}\n  (manifest recorded {path_text})\n"
-            f"  Check --data-root, currently {data_root}"
-        )
-    return resolved
+    tried = "".join(f"  tried: {candidate}\n" for candidate in candidates)
+    raise VisualizationError(
+        "Cannot find a file this manifest row names.\n"
+        f"  manifest recorded: {path_text}\n{tried}"
+        "  Pass --data-root pointing at the directory holding DRISHTI-GS/, "
+        "REFUGE/, RIM-ONE-DL_masks/ and RIM-ONE_DL_images/."
+    )
 
 
-def _record_from_row(row: dict[str, str], data_root: Path) -> FundusRecord:
+def _record_from_row(row: dict[str, str], data_root: Path | None) -> FundusRecord:
     mask_paths = [
         _remap(part, data_root) for part in row["mask_paths"].split("|") if part
     ]
@@ -193,7 +205,7 @@ def _record_from_row(row: dict[str, str], data_root: Path) -> FundusRecord:
 
 
 def _read_manifest(
-    run_dir: Path, data_root: Path, target_domain: str | None
+    run_dir: Path, data_root: Path | None, target_domain: str | None
 ) -> list[FundusRecord]:
     path = run_dir / "split_manifest.csv"
     if not path.is_file():
@@ -491,7 +503,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--data-root", type=Path, default=REPO_ROOT / "datasets")
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=None,
+        help="Directory holding DRISHTI-GS/, REFUGE/, RIM-ONE-DL_masks/ and "
+        "RIM-ONE_DL_images/. Omit to use the path in the manifest where it "
+        f"resolves, else {DEFAULT_DATA_ROOT}",
+    )
     parser.add_argument(
         "--target-domain",
         default=None,
@@ -577,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
     device = torch.device(args.device)
     model.to(device).eval()
 
-    data_root = args.data_root.resolve()
+    data_root = args.data_root.resolve() if args.data_root is not None else None
     records = _read_manifest(run_dir, data_root, args.target_domain)
     by_id = {record.sample_id: record for record in records}
     metrics = _read_per_image_metrics(run_dir, args.target_domain)

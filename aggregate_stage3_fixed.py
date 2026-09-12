@@ -183,9 +183,27 @@ def discover_fixed_runs(roots: Iterable[str | Path]) -> tuple[FixedRun, ...]:
 def select_fixed_runs(
     runs: Sequence[FixedRun],
     expected_seeds: Sequence[int] = DEFAULT_EXPECTED_SEEDS,
+    arm: str | None = None,
 ) -> tuple[FixedRun, ...]:
-    """Keep one run per domain/seed and prove the grid is complete."""
+    """Keep one run per domain/seed and prove the grid is complete.
 
+    ``arm`` restricts the selection to one experiment when a run root holds
+    several (the plain fixed-budget arm and the Global FiLM arm share
+    ``artifacts/runs``); without it the runs must already be a single arm.
+    """
+
+    if arm is not None:
+        runs = [run for run in runs if run.arm == arm]
+        if not runs:
+            raise FixedLodoReportError(f"No scientific runs found for arm {arm!r}")
+    # Check the arms before collapsing to one run per cell: two arms share every
+    # (domain, seed) cell, so a later dedup would silently keep whichever
+    # finished last and report a mixture as one arm.
+    arms = {run.arm for run in runs}
+    if len(arms) > 1:
+        raise FixedLodoReportError(
+            f"Runs mix experimental arms: {sorted(arms)}; pass --arm to pick one"
+        )
     by_cell: dict[tuple[str, int], FixedRun] = {}
     for run in runs:
         key = (run.held_out_domain.value, run.run_seed)
@@ -198,9 +216,6 @@ def select_fixed_runs(
     if not selected:
         raise FixedLodoReportError("No scientific fixed-budget LODO runs were found")
 
-    arms = {run.arm for run in selected}
-    if len(arms) != 1:
-        raise FixedLodoReportError(f"Runs mix experimental arms: {sorted(arms)}")
     digests = {run.manifest_sha256 for run in selected}
     if len(digests) != 1:
         raise FixedLodoReportError(
@@ -462,8 +477,14 @@ def holm_adjust(p_values: Sequence[float]) -> tuple[float, ...]:
 def paired_tests(
     substrate: Substrate,
     method: str = "wilcoxon",
+    reference_arm: str = POOLED_ARM,
 ) -> tuple[PairedResult, ...]:
-    """Test pooled_120 minus each single-source arm, per domain and structure.
+    """Test ``reference_arm`` minus every other arm, per domain and structure.
+
+    By default the reference is the pooled 120-image arm and the others are the
+    single-source arms. The Step 4 comparison reuses this with Global FiLM as
+    the reference and the plain fixed-budget arm as the other, so a positive
+    difference always reads "the reference arm helped".
 
     Wilcoxon signed-rank is the default because per-image Dice is bounded in
     [0, 1] and typically left-skewed with a clump at the ceiling, so the paired
@@ -475,14 +496,14 @@ def paired_tests(
         raise FixedLodoReportError(
             f"Unknown paired method {method!r}; expected one of {list(PAIRED_METHODS)}"
         )
-    if POOLED_ARM not in substrate.arms:
+    if reference_arm not in substrate.arms:
         raise FixedLodoReportError(
-            f"{POOLED_ARM} is absent; there is nothing to compare against"
+            f"{reference_arm} is absent; there is nothing to compare against"
         )
 
     raw: list[dict[str, Any]] = []
     domains = sorted(
-        {key[1] for key in substrate.values if key[0] == POOLED_ARM},
+        {key[1] for key in substrate.values if key[0] == reference_arm},
         key=lambda d: d.value,
     )
     for domain in domains:
@@ -490,11 +511,11 @@ def paired_tests(
             {
                 key[0]
                 for key in substrate.values
-                if key[1] == domain and key[0] != POOLED_ARM
+                if key[1] == domain and key[0] != reference_arm
             }
         )
         for structure in CHANNEL_NAMES:
-            pooled_ids = substrate.image_ids(POOLED_ARM, domain, structure)
+            pooled_ids = substrate.image_ids(reference_arm, domain, structure)
             if not pooled_ids:
                 # No scores for this structure. Emitting a zero-image result with
                 # p = 1 would pad the Holm family and make every real test's
@@ -504,20 +525,20 @@ def paired_tests(
                 other_ids = substrate.image_ids(arm, domain, structure)
                 if pooled_ids != other_ids:
                     raise FixedLodoReportError(
-                        f"{domain.value} {structure}: {POOLED_ARM} scored "
+                        f"{domain.value} {structure}: {reference_arm} scored "
                         f"{len(pooled_ids)} images and {arm} scored "
                         f"{len(other_ids)}; a paired test needs identical images"
                     )
-                pooled_seeds = substrate.seed_counts[(POOLED_ARM, domain)]
+                pooled_seeds = substrate.seed_counts[(reference_arm, domain)]
                 other_seeds = substrate.seed_counts[(arm, domain)]
                 if pooled_seeds != other_seeds:
                     raise FixedLodoReportError(
-                        f"{domain.value}: {POOLED_ARM} averaged {pooled_seeds} seeds "
+                        f"{domain.value}: {reference_arm} averaged {pooled_seeds} seeds "
                         f"and {arm} averaged {other_seeds}. A five-seed mean and a "
                         "three-seed mean are not the same estimator"
                     )
                 a = substrate.series(arm, domain, structure, pooled_ids)
-                b = substrate.series(POOLED_ARM, domain, structure, pooled_ids)
+                b = substrate.series(reference_arm, domain, structure, pooled_ids)
                 difference = b - a
                 if np.allclose(difference, 0.0):
                     statistic, p_value = 0.0, 1.0
@@ -532,7 +553,7 @@ def paired_tests(
                         "domain": domain,
                         "structure": structure,
                         "arm_a": arm,
-                        "arm_b": POOLED_ARM,
+                        "arm_b": reference_arm,
                         "n": len(pooled_ids),
                         "mean_a": float(a.mean()),
                         "mean_b": float(b.mean()),
@@ -828,6 +849,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Summarise the fixed arm only, without the train-on-one comparison",
     )
+    parser.add_argument(
+        "--arm",
+        help=(
+            "Experiment name of the fixed-budget arm to summarise when the run "
+            "roots hold more than one (e.g. the plain and Global FiLM arms)"
+        ),
+    )
     parser.add_argument("--report-out", type=Path)
     parser.add_argument("--csv-out", type=Path)
     return parser.parse_args(argv)
@@ -840,7 +868,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest_path = args.manifest.expanduser().resolve()
         manifest = load_single_source_manifest(manifest_path)
         fixed = select_fixed_runs(
-            discover_fixed_runs(roots), tuple(args.expected_seeds)
+            discover_fixed_runs(roots), tuple(args.expected_seeds), arm=args.arm
         )
         digest = _sha256(manifest_path)
         if fixed[0].manifest_sha256 != digest:

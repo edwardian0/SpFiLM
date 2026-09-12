@@ -376,8 +376,9 @@ def _run_one(
     device = choose_device(engine_config.requested_device)
     source_domains = sorted({record.domain for record in locked_splits["train"]})
     print(
-        f"Stage 3 fixed-budget LODO | held out={held_out_domain.value} | "
-        f"seed={seed} | device={device} | {'SMOKE' if smoke else 'FULL'}",
+        f"Stage 3 fixed-budget LODO | arm={config.arm} | "
+        f"held out={held_out_domain.value} | seed={seed} | device={device} | "
+        f"{'SMOKE' if smoke else 'FULL'}",
         flush=True,
     )
     print(
@@ -423,7 +424,15 @@ def _run_one(
             "test": config.test_budget,
             "subsample_seed": config.subsample_seed,
         },
-        "paired_with": "stage3_single_source_plain_unet",
+        "conditioning_arm": config.arm,
+        # The plain arm is paired with the train-on-one arm (training volume is
+        # the variable); a conditioned arm names the plain fixed-budget arm it is
+        # paired with (conditioning is the variable). Same manifest either way.
+        "paired_with": (
+            "stage3_single_source_plain_unet"
+            if config.arm == "plain"
+            else config.paired_arm
+        ),
         "source_test_policy": "exclude",
         "manifest_path": str(manifest_path),
         "manifest_sha256": _sha256(manifest_path),

@@ -30,6 +30,18 @@ from .data import (
     stratified_partition,
     validate_splits,
 )
+from .film.conditioning import (
+    DESCRIPTOR_NAMES,
+    DESCRIPTOR_POLICY,
+    SELECTION_POLICY,
+    ConditionResult,
+    ConditioningError,
+    DomainVocabulary,
+    FixedCondition,
+    NearestCondition,
+    NearestDomainSelector,
+    OracleCondition,
+)
 from .losses import BCEDiceLoss
 from .metrics import (
     CHANNEL_NAMES,
@@ -38,7 +50,7 @@ from .metrics import (
     metric_frame,
     summarise_per_image_csv,
 )
-from .model import PlainUNet
+from .model import ARMS, build_model
 from .visualization import (
     save_mask_contact_sheet,
     save_prediction_gallery,
@@ -46,19 +58,27 @@ from .visualization import (
 )
 
 
-def _save_checkpoint(path, model, optimizer, epoch, val_metrics, config) -> None:
-    """Single writer for both checkpoints so their payload schemas cannot drift."""
-    torch.save(
-        {
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "epoch": epoch,
-            "validation_metrics": val_metrics,
-            "config": asdict(config),
-            "channel_order": ["disc", "cup"],
-        },
-        path,
-    )
+def _save_checkpoint(
+    path, model, optimizer, epoch, val_metrics, config, conditioning=None
+) -> None:
+    """Single writer for both checkpoints so their payload schemas cannot drift.
+
+    ``conditioning`` (conditioned arms only) carries the domain vocabulary and
+    the fitted nearest-domain selector, because a FiLM checkpoint is unusable
+    without knowing which code means which domain and how test images get one.
+    """
+    payload = {
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "epoch": epoch,
+        "validation_metrics": val_metrics,
+        "config": asdict(config),
+        "channel_order": ["disc", "cup"],
+        "arm": config.arm,
+    }
+    if conditioning is not None:
+        payload["conditioning"] = conditioning
+    torch.save(payload, path)
 
 
 @dataclass(frozen=True)
@@ -91,12 +111,37 @@ class Stage2Config:
     brightness_contrast: float = 0.10
     requested_device: str = "auto"
     rim_manifest: str | None = None
+    # Conditioning arm. "plain" is the Stage 2/3 backbone with no conditioning;
+    # "global_film" adds channel-wise FiLM after each encoder block (Step 4).
+    # The film_* fields are ignored by the plain arm and, so that in-flight plain
+    # runs keep resuming, are left out of the plain resume fingerprint.
+    arm: str = "plain"
+    film_levels: int = 5
+    film_embedding_dim: int = 64
+    film_hidden_dim: int = 256
+    film_clamp: float = 5.0
+    # How held-out test images get a domain code. "nearest_domain": the source
+    # domain whose training descriptor centroid is nearest (the supervisor's
+    # policy for unseen domains). "oracle": the true code, valid only when every
+    # test image's domain is in the training vocabulary (in-domain checks).
+    test_conditioning: str = "nearest_domain"
 
     @classmethod
     def from_json(cls, path: str | Path) -> "Stage2Config":
         with Path(path).open(encoding="utf-8") as stream:
             values = json.load(stream)
         return cls(**values)
+
+
+FILM_CONFIG_FIELDS = (
+    "arm",
+    "film_levels",
+    "film_embedding_dim",
+    "film_hidden_dim",
+    "film_clamp",
+    "test_conditioning",
+)
+TEST_CONDITIONING_POLICIES = ("nearest_domain", "oracle")
 
 
 def _resolve(project_root: Path, value: str) -> Path:
@@ -240,10 +285,19 @@ RESUME_STATE_FILENAME = "resume_state.pt"
 
 
 def _resume_fingerprint(config: Stage2Config, split_counts: dict[str, int]) -> str:
-    """Identity of the run a resume file belongs to; a mismatch must never resume."""
+    """Identity of the run a resume file belongs to; a mismatch must never resume.
 
+    The plain arm's fingerprint is computed exactly as before the conditioning
+    fields existed, so a plain run preempted under the old code resumes under
+    the new. A conditioned arm hashes every field.
+    """
+
+    config_payload = asdict(config)
+    if config.arm == "plain":
+        for field in FILM_CONFIG_FIELDS:
+            config_payload.pop(field, None)
     payload = json.dumps(
-        {"config": asdict(config), "split_counts": split_counts}, sort_keys=True
+        {"config": config_payload, "split_counts": split_counts}, sort_keys=True
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -311,6 +365,21 @@ def _make_loader(
     )
 
 
+ConditionFn = Callable[[torch.Tensor, Mapping[str, Any]], ConditionResult]
+
+
+def _forward(
+    model: torch.nn.Module,
+    images: torch.Tensor,
+    condition: ConditionResult | None,
+) -> torch.Tensor:
+    """The plain arm takes images alone; a conditioned arm also takes its codes."""
+
+    if condition is None:
+        return model(images)
+    return model(images, condition.indices)
+
+
 def train_one_epoch(
     model: torch.nn.Module,
     loader: DataLoader,
@@ -320,6 +389,7 @@ def train_one_epoch(
     device: torch.device,
     max_batches: int | None = None,
     repair_counter: dict[str, int] | None = None,
+    condition_fn: ConditionFn | None = None,
 ) -> float:
     model.train()
     total_loss = 0.0
@@ -327,11 +397,12 @@ def train_one_epoch(
     for batch_index, (images, targets, metadata) in enumerate(loader):
         images = images.to(device, non_blocking=device.type == "cuda")
         targets = targets.to(device, non_blocking=device.type == "cuda")
+        condition = None if condition_fn is None else condition_fn(images, metadata)
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(
             device_type=device.type, enabled=device.type == "cuda"
         ):
-            logits = model(images)
+            logits = _forward(model, images, condition)
             loss = criterion(logits, targets)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
@@ -369,18 +440,33 @@ def evaluate(
     max_batches: int | None = None,
     per_image_csv: str | Path | None = None,
     native_hd95: bool = False,
+    condition_fn: ConditionFn | None = None,
 ) -> dict[str, Any]:
+    """Score one loader. With ``condition_fn`` the per-image codes are returned too.
+
+    ``metrics["conditioning"]`` then holds one row per image recording which
+    code was used, where it came from, and (when a selector chose it) the
+    distances and descriptor it saw, so a held-out result can later be broken
+    down by the code it was scored under.
+    """
+
     model.eval()
     total_loss = 0.0
     sample_count = 0
     overlap = OverlapAccumulator(threshold=threshold)
     sample_ids: list[str] = []
+    conditioning_rows: list[dict[str, Any]] = []
     image_size = 0
     hd95_unit: str | None = None
     for batch_index, (images, targets, metadata) in enumerate(loader):
         images = images.to(device, non_blocking=device.type == "cuda")
         targets = targets.to(device, non_blocking=device.type == "cuda")
-        logits = model(images)
+        condition = None if condition_fn is None else condition_fn(images, metadata)
+        if condition is not None:
+            conditioning_rows.extend(
+                _conditioning_rows(condition, metadata, condition_fn.vocabulary)
+            )
+        logits = _forward(model, images, condition)
         loss = criterion(logits, targets)
         total_loss += loss.item() * images.shape[0]
         sample_count += images.shape[0]
@@ -435,7 +521,133 @@ def evaluate(
         csv_path = overlap.write_per_image_csv(per_image_csv)
         metrics["per_image_csv"] = str(csv_path)
         metrics.update(summarise_per_image_csv(csv_path))
+    if condition_fn is not None:
+        metrics["conditioning"] = {
+            "source": condition_fn.source,
+            "vocabulary": condition_fn.vocabulary.to_json(),
+            "rows": conditioning_rows,
+        }
     return metrics
+
+
+def _conditioning_rows(
+    condition: ConditionResult,
+    metadata: Mapping[str, Any],
+    vocabulary: DomainVocabulary,
+) -> list[dict[str, Any]]:
+    """One record per image: the code used and what the selector saw, if any."""
+
+    sample_ids = [str(value) for value in metadata["sample_id"]]
+    true_domains = [str(value) for value in metadata["domain"]]
+    indices = condition.indices.detach().cpu().tolist()
+    if len(indices) != len(sample_ids):
+        raise ConditioningError(
+            f"{len(indices)} codes for {len(sample_ids)} images"
+        )
+    distances = (
+        None if condition.distances is None else condition.distances.detach().cpu()
+    )
+    descriptors = (
+        None
+        if condition.descriptors is None
+        else condition.descriptors.detach().cpu()
+    )
+    rows: list[dict[str, Any]] = []
+    for position, (sample_id, true_domain, index) in enumerate(
+        zip(sample_ids, true_domains, indices)
+    ):
+        row: dict[str, Any] = {
+            "image_id": sample_id,
+            "true_domain": true_domain,
+            "selected_domain": vocabulary.domains[int(index)],
+            "condition_source": condition.source,
+        }
+        for domain_position, domain in enumerate(vocabulary.domains):
+            row[f"distance_{domain}"] = (
+                float(distances[position, domain_position])
+                if distances is not None
+                else ""
+            )
+        for name_position, name in enumerate(DESCRIPTOR_NAMES):
+            row[name] = (
+                float(descriptors[position, name_position])
+                if descriptors is not None
+                else ""
+            )
+        rows.append(row)
+    return rows
+
+
+def write_conditioning_csv(
+    rows: Sequence[Mapping[str, Any]], output_path: str | Path
+) -> Path:
+    """Write the per-image conditioning records next to the metric CSV."""
+
+    if not rows:
+        raise RuntimeError("Cannot write conditioning records before any samples")
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    return output_path
+
+
+def summarise_conditioning(
+    rows: Sequence[Mapping[str, Any]], vocabulary: DomainVocabulary
+) -> dict[str, Any]:
+    """Assignment counts and, when the selector ran, the mean nearest distance."""
+
+    counts = {domain: 0 for domain in vocabulary.domains}
+    nearest: list[float] = []
+    for row in rows:
+        counts[str(row["selected_domain"])] += 1
+        candidates = [
+            row[f"distance_{domain}"]
+            for domain in vocabulary.domains
+            if row[f"distance_{domain}"] != ""
+        ]
+        if candidates:
+            nearest.append(min(float(value) for value in candidates))
+    true_domains = sorted({str(row["true_domain"]) for row in rows})
+    return {
+        "sample_count": len(rows),
+        "true_domains": true_domains,
+        "true_domains_in_vocabulary": all(
+            domain in vocabulary.domains for domain in true_domains
+        ),
+        "assignment_counts": counts,
+        "mean_nearest_distance": (
+            float(np.mean(nearest)) if nearest else None
+        ),
+    }
+
+
+def selector_confusion(
+    rows: Sequence[Mapping[str, Any]], vocabulary: DomainVocabulary
+) -> dict[str, Any]:
+    """How often the selector recovers the true domain on source-domain images."""
+
+    confusion = {
+        true: {selected: 0 for selected in vocabulary.domains}
+        for true in vocabulary.domains
+    }
+    correct = 0
+    for row in rows:
+        true = str(row["true_domain"])
+        selected = str(row["selected_domain"])
+        if true not in confusion:
+            raise ConditioningError(
+                f"Selector accuracy is only defined on vocabulary domains, got {true!r}"
+            )
+        confusion[true][selected] += 1
+        correct += int(true == selected)
+    return {
+        "sample_count": len(rows),
+        "accuracy": (correct / len(rows)) if rows else None,
+        "confusion": confusion,
+    }
 
 
 RIM_ONE_DL_PER_IMAGE_CONTEXT = (
@@ -532,6 +744,7 @@ def evaluate_named_test_set(
     output_dir: Path,
     name: str,
     smoke: bool = False,
+    condition_fn: ConditionFn | None = None,
 ) -> dict[str, Any]:
     """Score one named test set on its own and write its metrics and overlays.
 
@@ -559,6 +772,7 @@ def evaluate_named_test_set(
         max_batches=1 if smoke else None,
         per_image_csv=per_image_csv,
         native_hd95=native_hd95,
+        condition_fn=condition_fn,
     )
     if native_hd95:
         _append_rim_one_dl_per_image_context(
@@ -578,12 +792,159 @@ def evaluate_named_test_set(
         gallery_path,
         threshold=config.threshold,
         count=1 if smoke else 6,
+        predict=_gallery_predictor(model, condition_fn),
     )
     metrics["artifacts"] = {
         "per_image_metrics": str(per_image_csv),
         "predictions": str(gallery_path),
     }
+    if condition_fn is not None:
+        conditioning_csv = output_dir / f"test_{name}_conditioning_per_image.csv"
+        rows = metrics["conditioning"].pop("rows")
+        write_conditioning_csv(rows, conditioning_csv)
+        metrics["conditioning"].update(
+            summarise_conditioning(rows, condition_fn.vocabulary)
+        )
+        metrics["conditioning"]["per_image_csv"] = str(conditioning_csv)
+        metrics["artifacts"]["conditioning_per_image"] = str(conditioning_csv)
     return metrics
+
+
+def _gallery_predictor(
+    model: torch.nn.Module, condition_fn: ConditionFn | None
+) -> Callable[[torch.Tensor, Mapping[str, Any]], torch.Tensor] | None:
+    """A conditioned arm's overlays must show the prediction under its real code."""
+
+    if condition_fn is None:
+        return None
+
+    def predict(images: torch.Tensor, metadata: Mapping[str, Any]) -> torch.Tensor:
+        return _forward(model, images, condition_fn(images, metadata))
+
+    return predict
+
+
+def _conditioning_report(
+    *,
+    model: torch.nn.Module,
+    config: Stage2Config,
+    device: torch.device,
+    criterion: torch.nn.Module,
+    vocabulary: DomainVocabulary,
+    selector: NearestDomainSelector,
+    test_condition: ConditionFn,
+    test_metrics: dict[str, Any],
+    val_loader: DataLoader,
+    score_test: Callable[[Path, ConditionFn | None], dict[str, Any]],
+    output_dir: Path,
+    max_batches: int | None,
+) -> dict[str, Any]:
+    """Everything needed to interpret a conditioned arm's held-out score.
+
+    Three things are recorded. (1) Which code each test image was scored under,
+    so Dice can be broken down by assigned domain. (2) The selector's accuracy
+    on source-domain validation images, whose true domain is known: if it cannot
+    tell the source domains apart, "nearest domain" on an unseen one means
+    little. (3) A fixed-code sweep, scoring the held-out set once under each
+    source code. If all codes give the same Dice the conditioning is inert and
+    the selector is irrelevant; if they differ, the sweep shows whether the
+    selector found the best code. These are inference-only and cheap.
+    """
+
+    artifacts: dict[str, str] = {}
+
+    test_rows = test_metrics["conditioning"].pop("rows")
+    conditioning_csv = write_conditioning_csv(
+        test_rows, output_dir / "test_conditioning_per_image.csv"
+    )
+    test_metrics["conditioning"].update(summarise_conditioning(test_rows, vocabulary))
+    test_metrics["conditioning"]["per_image_csv"] = str(conditioning_csv)
+    artifacts["test_conditioning_per_image"] = str(conditioning_csv)
+
+    validation_rows: list[dict[str, Any]] = []
+    probe = NearestCondition(selector)
+    with torch.inference_mode():
+        for batch_index, (images, _targets, metadata) in enumerate(val_loader):
+            images = images.to(device, non_blocking=device.type == "cuda")
+            validation_rows.extend(
+                _conditioning_rows(probe(images, metadata), metadata, vocabulary)
+            )
+            if max_batches is not None and batch_index + 1 >= max_batches:
+                break
+    validation_csv = write_conditioning_csv(
+        validation_rows, output_dir / "val_selector_per_image.csv"
+    )
+    artifacts["val_selector_per_image"] = str(validation_csv)
+    selector_validation = selector_confusion(validation_rows, vocabulary)
+    selector_validation["per_image_csv"] = str(validation_csv)
+
+    sweep: dict[str, Any] = {}
+    for domain in vocabulary.domains:
+        csv_path = output_dir / f"test_fixed_code_{domain}_per_image_metrics.csv"
+        metrics = score_test(csv_path, FixedCondition(vocabulary, domain))
+        metrics.pop("conditioning", None)
+        metrics.pop("sample_ids", None)
+        sweep[domain] = metrics
+        artifacts[f"test_fixed_code_{domain}_per_image_metrics"] = str(csv_path)
+
+    best_fixed_code: dict[str, str] = {}
+    nearest_matches_best: dict[str, bool] = {}
+    nearest_minus_best: dict[str, float] = {}
+    for structure in CHANNEL_NAMES:
+        best = max(
+            vocabulary.domains,
+            key=lambda domain: float(sweep[domain][structure]["dice_mean"]),
+        )
+        best_fixed_code[structure] = best
+        nearest_dice = float(test_metrics[structure]["dice_mean"])
+        best_dice = float(sweep[best][structure]["dice_mean"])
+        nearest_minus_best[structure] = nearest_dice - best_dice
+        nearest_matches_best[structure] = math.isclose(
+            nearest_dice, best_dice, rel_tol=0.0, abs_tol=1e-9
+        )
+
+    return {
+        "arm": config.arm,
+        "vocabulary": vocabulary.to_json(),
+        "train_val_conditioning": OracleCondition.source,
+        "test_conditioning": config.test_conditioning,
+        "test_condition_source": test_condition.source,
+        "descriptor": list(DESCRIPTOR_NAMES),
+        "descriptor_policy": DESCRIPTOR_POLICY,
+        "selection_policy": SELECTION_POLICY,
+        "film": {
+            "levels": config.film_levels,
+            "embedding_dim": config.film_embedding_dim,
+            "hidden_dim": config.film_hidden_dim,
+            "clamp": config.film_clamp,
+        },
+        "selector": {
+            "path": str(output_dir / "domain_selector.json"),
+            "fitted_counts": dict(
+                zip(vocabulary.domains, selector.fitted_counts)
+            ),
+            "centroids": {
+                domain: dict(zip(DESCRIPTOR_NAMES, selector.centroids[i].tolist()))
+                for i, domain in enumerate(vocabulary.domains)
+            },
+        },
+        "test": test_metrics["conditioning"],
+        "selector_validation": selector_validation,
+        "fixed_code_sweep": {
+            domain: {
+                structure: {
+                    key: sweep[domain][structure][key]
+                    for key in ("dice_mean", "iou_mean", "hd95_mean", "sample_count")
+                }
+                for structure in CHANNEL_NAMES
+            }
+            for domain in vocabulary.domains
+        },
+        "best_fixed_code": best_fixed_code,
+        "nearest_domain_matches_best_fixed_code": nearest_matches_best,
+        "nearest_domain_minus_best_fixed_code_dice": nearest_minus_best,
+        "artifacts": artifacts,
+    }
 
 
 def run_experiment(
@@ -678,7 +1039,74 @@ def run_experiment(
     val_loader = _make_loader(val_dataset, config, device, False, generator)
     test_loader = _make_loader(test_dataset, config, device, False, generator)
 
-    model = PlainUNet(base_channels=config.base_channels).to(device)
+    if config.arm not in ARMS:
+        raise ValueError(f"arm must be one of {ARMS}, got {config.arm!r}")
+    if config.test_conditioning not in TEST_CONDITIONING_POLICIES:
+        raise ValueError(
+            f"test_conditioning must be one of {TEST_CONDITIONING_POLICIES}, got "
+            f"{config.test_conditioning!r}"
+        )
+    conditioned = config.arm != "plain"
+    vocabulary: DomainVocabulary | None = None
+    selector: NearestDomainSelector | None = None
+    train_condition: ConditionFn | None = None
+    test_condition: ConditionFn | None = None
+    checkpoint_conditioning: dict[str, Any] | None = None
+    if conditioned:
+        # Codes are fold-local: only the domains that will see gradients get one.
+        vocabulary = DomainVocabulary.from_domains(
+            record.domain for record in splits["train"]
+        )
+        if config.test_conditioning == "oracle":
+            missing = sorted(
+                {record.domain for record in splits["test"]} - set(vocabulary.domains)
+            )
+            if missing:
+                raise ConditioningError(
+                    "test_conditioning='oracle' needs every test domain in the "
+                    f"training vocabulary {list(vocabulary.domains)}; missing {missing}"
+                )
+        # The nearest-domain selector depends only on the training images, never
+        # on the network, so it is fitted once up front (on un-augmented images,
+        # so the brightness/contrast jitter cannot inflate the reference spread)
+        # and is recomputed identically on a resume.
+        selector_loader = _make_loader(
+            _make_dataset(splits["train"], config, augment=False),
+            config,
+            device,
+            False,
+            torch.Generator().manual_seed(config.seed),
+        )
+        selector = NearestDomainSelector.fit_from_loader(selector_loader, vocabulary)
+        selector.save(output_dir / "domain_selector.json")
+        train_condition = OracleCondition(vocabulary)
+        test_condition = (
+            NearestCondition(selector)
+            if config.test_conditioning == "nearest_domain"
+            else OracleCondition(vocabulary)
+        )
+        checkpoint_conditioning = {
+            "domain_vocabulary": vocabulary.to_json(),
+            "domain_selector": selector.to_json(),
+            "train_val_conditioning": OracleCondition.source,
+            "test_conditioning": config.test_conditioning,
+        }
+        print(
+            f"conditioning | arm={config.arm} | codes={list(vocabulary.domains)} | "
+            f"train/val=oracle | test={config.test_conditioning} | "
+            f"film_levels={config.film_levels}",
+            flush=True,
+        )
+
+    model = build_model(
+        config.arm,
+        config.base_channels,
+        num_domains=len(vocabulary) if vocabulary is not None else None,
+        film_levels=config.film_levels,
+        embedding_dim=config.film_embedding_dim,
+        hidden_dim=config.film_hidden_dim,
+        clamp=config.film_clamp,
+    ).to(device)
     criterion = BCEDiceLoss()
     optimizer = torch.optim.Adam(
         model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
@@ -755,6 +1183,7 @@ def run_experiment(
             device,
             max_batches=max_batches,
             repair_counter=cup_repairs,
+            condition_fn=train_condition,
         )
         val_metrics = evaluate(
             model,
@@ -764,7 +1193,11 @@ def run_experiment(
             threshold=config.threshold,
             max_batches=max_batches,
             native_hd95=val_native_hd95,
+            condition_fn=train_condition,
         )
+        # Per-image code rows are for the test report, not for every epoch's
+        # checkpoint payload.
+        val_metrics.pop("conditioning", None)
         val_loss = float(val_metrics["loss"])
         if not math.isfinite(val_loss):
             raise RuntimeError(f"Validation loss became non-finite at epoch {epoch}")
@@ -823,12 +1256,24 @@ def run_experiment(
             best_val_loss = val_loss
             best_epoch = epoch
             _save_checkpoint(
-                checkpoint_path, model, optimizer, epoch, val_metrics, config
+                checkpoint_path,
+                model,
+                optimizer,
+                epoch,
+                val_metrics,
+                config,
+                conditioning=checkpoint_conditioning,
             )
         # last_model.pt is rewritten every epoch so the final-epoch weights are
         # recoverable without re-running, whatever the monitor decided.
         _save_checkpoint(
-            last_checkpoint_path, model, optimizer, epoch, val_metrics, config
+            last_checkpoint_path,
+            model,
+            optimizer,
+            epoch,
+            val_metrics,
+            config,
+            conditioning=checkpoint_conditioning,
         )
         if allow_resume:
             _save_resume_state(
@@ -865,29 +1310,53 @@ def run_experiment(
 
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
-    test_metrics = evaluate(
-        model,
-        test_loader,
-        criterion,
-        device,
-        threshold=config.threshold,
-        max_batches=max_batches,
-        per_image_csv=output_dir / "test_per_image_metrics.csv",
-        native_hd95=test_native_hd95,
-    )
-    if test_native_hd95:
-        _append_rim_one_dl_per_image_context(
-            output_dir / "test_per_image_metrics.csv",
-            splits["test"],
-            config.image_size,
+
+    def _score_test(
+        per_image_csv: Path, condition_fn: ConditionFn | None
+    ) -> dict[str, Any]:
+        metrics = evaluate(
+            model,
+            test_loader,
+            criterion,
+            device,
+            threshold=config.threshold,
+            max_batches=max_batches,
+            per_image_csv=per_image_csv,
+            native_hd95=test_native_hd95,
+            condition_fn=condition_fn,
         )
-        if test_metrics.get("hd95_unit") != HD95_UNIT_NATIVE:
-            raise RuntimeError(
-                "RIM-ONE-DL evaluation did not convert HD95 to native pixels"
+        if test_native_hd95:
+            _append_rim_one_dl_per_image_context(
+                per_image_csv, splits["test"], config.image_size
             )
-        test_metrics["metric_frame"] = _rim_one_dl_metric_frame(config.image_size)
-        test_metrics["per_image_context_fields"] = list(
-            RIM_ONE_DL_PER_IMAGE_CONTEXT
+            if metrics.get("hd95_unit") != HD95_UNIT_NATIVE:
+                raise RuntimeError(
+                    "RIM-ONE-DL evaluation did not convert HD95 to native pixels"
+                )
+            metrics["metric_frame"] = _rim_one_dl_metric_frame(config.image_size)
+            metrics["per_image_context_fields"] = list(RIM_ONE_DL_PER_IMAGE_CONTEXT)
+        return metrics
+
+    test_metrics = _score_test(
+        output_dir / "test_per_image_metrics.csv", test_condition
+    )
+    conditioning_report: dict[str, Any] | None = None
+    if conditioned:
+        assert vocabulary is not None and selector is not None
+        assert test_condition is not None
+        conditioning_report = _conditioning_report(
+            model=model,
+            config=config,
+            device=device,
+            criterion=criterion,
+            vocabulary=vocabulary,
+            selector=selector,
+            test_condition=test_condition,
+            test_metrics=test_metrics,
+            val_loader=val_loader,
+            score_test=_score_test,
+            output_dir=output_dir,
+            max_batches=max_batches,
         )
     test_by_name: dict[str, Any] = {}
     for name in sorted(extra_test_sets or {}):
@@ -900,6 +1369,7 @@ def run_experiment(
             output_dir,
             name,
             smoke=smoke,
+            condition_fn=test_condition,
         )
     save_training_curves(history, output_dir / "training_curves.png")
     save_prediction_gallery(
@@ -909,10 +1379,12 @@ def run_experiment(
         output_dir / "test_predictions.png",
         threshold=config.threshold,
         count=1 if smoke else 6,
+        predict=_gallery_predictor(model, test_condition),
     )
 
     report = {
         "experiment_name": config.experiment_name,
+        "arm": config.arm,
         "smoke_test": smoke,
         "device": str(device),
         "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
@@ -950,6 +1422,7 @@ def run_experiment(
         },
         "test": test_metrics,
         "test_by_name": test_by_name,
+        "conditioning": conditioning_report,
         "reporting_rule": "Disc and cup metrics are separate; no combined Dice is reported.",
         "metric_frame": test_metrics["metric_frame"],
         "degenerate_case_policy": DEGENERATE_POLICY,
@@ -968,6 +1441,11 @@ def run_experiment(
                 for name, metrics in test_by_name.items()
                 for artifact, path in metrics["artifacts"].items()
             },
+            **(
+                conditioning_report["artifacts"]
+                if conditioning_report is not None
+                else {}
+            ),
         },
     }
     (output_dir / "test_metrics.json").write_text(

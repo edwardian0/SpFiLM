@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from .data import FundusRecord, validate_splits
-from .engine import Stage2Config
+from .engine import TEST_CONDITIONING_POLICIES, Stage2Config
 from .lodo import Domain, SampleKey, load_lodo_manifest
+from .model import ARMS, ConditionedUNet
 from .single_source import SingleSourceFold, SingleSourceManifest
 from .stage3 import (
     LodoDomainConfig,
@@ -61,6 +62,16 @@ class Stage3SingleSourceConfig:
     rotation_degrees: float
     brightness_contrast: float
     requested_device: str
+    # Conditioning arm and its settings; the plain arm carries the defaults and
+    # ignores them. ``paired_arm`` names the experiment this arm is paired with
+    # for the per-image significance test (same manifest, same test images).
+    arm: str = "plain"
+    film_levels: int = ConditionedUNet.ENCODER_LEVELS
+    film_embedding_dim: int = 64
+    film_hidden_dim: int = 256
+    film_clamp: float = 5.0
+    test_conditioning: str = "nearest_domain"
+    paired_arm: str | None = None
 
     @property
     def held_out_domains(self) -> tuple[Domain, ...]:
@@ -97,12 +108,21 @@ class Stage3SingleSourceConfig:
                 f"Stage 3 config must set stage={expected_stage!r}, got "
                 f"{payload.get('stage')!r}"
             )
-        if payload.get("arm") != "plain":
+        arm = payload.get("arm")
+        if arm not in ARMS:
             raise Stage3ConfigError(
-                "Only the plain Stage 3 single-source arm is currently supported"
+                f"arm must be one of {list(ARMS)}, got {arm!r}"
             )
+        film = _parse_film_block(payload.get("film"), arm)
 
         protocol = _mapping(payload.get("protocol"), "protocol")
+        paired_arm = protocol.get("paired_arm")
+        if paired_arm is not None and (
+            not isinstance(paired_arm, str) or not paired_arm
+        ):
+            raise Stage3ConfigError(
+                "protocol.paired_arm must be a non-empty string when present"
+            )
         if protocol.get("source_test_policy") != "exclude":
             raise Stage3ConfigError(
                 "protocol.source_test_policy must be 'exclude'"
@@ -207,6 +227,9 @@ class Stage3SingleSourceConfig:
                 allow_endpoints=True,
             ),
             requested_device=_string(payload, "requested_device"),
+            arm=arm,
+            paired_arm=paired_arm,
+            **film,
         )
         if config.early_stopping_mode not in {"monitor", "terminate"}:
             raise Stage3ConfigError(
@@ -281,7 +304,64 @@ class Stage3SingleSourceConfig:
                 if source_domain == Domain.RIM_ONE_DL
                 else None
             ),
+            arm=self.arm,
+            film_levels=self.film_levels,
+            film_embedding_dim=self.film_embedding_dim,
+            film_hidden_dim=self.film_hidden_dim,
+            film_clamp=self.film_clamp,
+            test_conditioning=self.test_conditioning,
         )
+
+
+FILM_BLOCK_DEFAULTS: dict[str, Any] = {
+    "film_levels": ConditionedUNet.ENCODER_LEVELS,
+    "film_embedding_dim": 64,
+    "film_hidden_dim": 256,
+    "film_clamp": 5.0,
+    "test_conditioning": "nearest_domain",
+}
+
+
+def _parse_film_block(raw: object, arm: str) -> dict[str, Any]:
+    """Read the optional ``film`` block; the plain arm must not carry one.
+
+    Keys are the config-file spellings (``levels``, ``embedding_dim``,
+    ``hidden_dim``, ``clamp``, ``test_conditioning``); missing keys take the
+    draft's defaults so a config only states what it changes.
+    """
+
+    if raw is None:
+        return dict(FILM_BLOCK_DEFAULTS)
+    if arm == "plain":
+        raise Stage3ConfigError("The plain arm must not carry a film block")
+    block = _mapping(raw, "film")
+    allowed = {"levels", "embedding_dim", "hidden_dim", "clamp", "test_conditioning"}
+    unknown = sorted(set(block) - allowed)
+    if unknown:
+        raise Stage3ConfigError(f"film has unknown keys {unknown}")
+    values = dict(FILM_BLOCK_DEFAULTS)
+    if "levels" in block:
+        levels = _positive_int(block, "levels")
+        if levels > ConditionedUNet.ENCODER_LEVELS:
+            raise Stage3ConfigError(
+                f"film.levels cannot exceed {ConditionedUNet.ENCODER_LEVELS}"
+            )
+        values["film_levels"] = levels
+    if "embedding_dim" in block:
+        values["film_embedding_dim"] = _positive_int(block, "embedding_dim")
+    if "hidden_dim" in block:
+        values["film_hidden_dim"] = _positive_int(block, "hidden_dim")
+    if "clamp" in block:
+        values["film_clamp"] = _positive_float(block, "clamp")
+    if "test_conditioning" in block:
+        policy = _string(block, "test_conditioning")
+        if policy not in TEST_CONDITIONING_POLICIES:
+            raise Stage3ConfigError(
+                "film.test_conditioning must be one of "
+                f"{list(TEST_CONDITIONING_POLICIES)}, got {policy!r}"
+            )
+        values["test_conditioning"] = policy
+    return values
 
 
 def parent_lodo_manifest_path(

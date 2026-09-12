@@ -93,6 +93,60 @@ commit the same manifest before submitting. Its current wall time must cover the
 configured 300 epochs: `early_stopping_mode: monitor` selects a checkpoint but
 does not shorten training.
 
+## Stage 4 (Step 4) quick start: Global FiLM
+
+Step 4 adds the honest baseline: channel-wise (global) FiLM after each encoder
+block of the *same* U-Net, trained with the true source-domain code. Under
+leave-one-domain-out the held-out domain has no code the model was trained
+with, so at test time each image gets the code of the source domain whose
+training appearance it is nearest to (`src/spfilm/film/conditioning.py`; the
+policy agreed with the supervisor). The FiLM layer itself is
+`src/spfilm/film/global_film.py` and is the K=0 case SpFiLM must reduce to.
+
+`configs/stage4_global_film*.json` are the fixed-budget Stage 3 configs with
+`arm` changed to `global_film` and a `film` block; every other setting is
+identical, and `tests/test_global_film.py` asserts that. The runner is the same
+`run_stage3_lodo_3_1_fixed.py`:
+
+```bash
+.spfilm/bin/python run_stage3_lodo_3_1_fixed.py \
+  --config configs/stage4_global_film.json run \
+  --held-out-domain refuge_zeiss --seed 42 --smoke --device cpu
+
+sbatch --time=0-00:20:00 submit_stage4_global_film.sh refuge_zeiss 42 --smoke
+sbatch submit_stage4_global_film.sh refuge_zeiss 42
+```
+
+Put the arm next to Step 3 (FiLM minus plain on identical test images; a
+partial FiLM grid pairs against the same seeds of the plain arm):
+
+```bash
+.spfilm/bin/python aggregate_stage4_film.py --expected-seeds 42 \
+  --report-out run_reports/stage4_global_film.md
+```
+
+`aggregate_stage3_fixed.py` now needs `--arm <experiment_name>` once a run root
+holds both arms; it refuses to mix them.
+
+### Stage 4 output contract
+
+A Global FiLM run writes the Stage 3 artifacts plus:
+
+- `domain_selector.json`: the fold's code vocabulary and the nearest-domain
+  reference statistics (also stored inside both checkpoints).
+- `test_conditioning_per_image.csv`: per held-out image, the code used, the
+  distance to every source centroid, and the descriptor.
+- `val_selector_per_image.csv`: the selector run on source validation images,
+  whose true domain is known; `conditioning.selector_validation` in
+  `test_metrics.json` gives its accuracy and confusion.
+- `test_fixed_code_<domain>_per_image_metrics.csv`: the held-out set scored
+  once under each source code; `conditioning.fixed_code_sweep` summarises it
+  and `nearest_domain_minus_best_fixed_code_dice` says whether the selector
+  found the best code. If the sweep is flat, the conditioning is inert.
+- `test_metrics.json["arm"]` and `["conditioning"]`; `parameter_count` includes
+  the FiLM generators. Plain runs record `arm: "plain"` and
+  `conditioning: null` and are otherwise unchanged.
+
 ## Directory map
 
 ```text
@@ -107,11 +161,15 @@ spfilm/
 │   ├── stage3.py                       # Stage 3 config and record resolution
 │   ├── losses.py                       # BCE + soft Dice training objective
 │   ├── metrics.py                      # per-image disc/cup Dice and IoU
-│   ├── model.py                        # plain 2D U-Net
+│   ├── model.py                        # plain 2D U-Net and its FiLM-conditioned wrapper
+│   ├── film/global_film.py             # channel-wise FiLM layer (Step 4)
+│   ├── film/conditioning.py            # domain codes; nearest-source-domain rule at test
 │   └── visualization.py                # mask and prediction QA figures
 ├── tests/                              # fast contract and shape tests
 ├── run_stage2.py                       # audit / inspect / train / all CLI
 ├── run_stage3_lodo.py                  # prepare / check / run LODO CLI
+├── run_stage3_lodo_3_1_fixed.py        # fixed-budget LODO runner, plain and global_film arms
+├── aggregate_stage4_film.py            # FiLM next to plain: paired test + selector diagnostics
 ├── submit_lodo_stage3.sh               # one CREATE fold/seed submission
 ├── STAGE2.md                           # research and execution protocol
 └── artifacts/                          # generated locally

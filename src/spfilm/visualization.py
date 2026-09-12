@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import random
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import matplotlib
 
@@ -123,7 +123,16 @@ def save_prediction_gallery(
     output_path: str | Path,
     threshold: float = 0.5,
     count: int = 6,
+    predict: Callable[[torch.Tensor, Mapping[str, Any]], torch.Tensor] | None = None,
 ) -> Path:
+    """Overlay targets and predictions for a few dataset items.
+
+    ``predict`` maps a ``(1, 3, H, W)`` batch and its batched metadata to logits;
+    a conditioned arm passes one that also chooses the domain code, so the
+    gallery shows the prediction the model actually makes at test time. When it
+    is omitted the model is called on the images alone.
+    """
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     selected_indices = np.linspace(
@@ -135,7 +144,12 @@ def save_prediction_gallery(
     model.eval()
     for row, index in enumerate(selected_indices):
         image_tensor, target_tensor, metadata = dataset[int(index)]
-        logits = model(image_tensor.unsqueeze(0).to(device))[0].cpu()
+        batch = image_tensor.unsqueeze(0).to(device)
+        if predict is None:
+            logits = model(batch)[0].cpu()
+        else:
+            batched_metadata = {key: [value] for key, value in metadata.items()}
+            logits = predict(batch, batched_metadata)[0].cpu()
         prediction = (torch.sigmoid(logits) >= threshold).numpy()
         image = image_tensor.permute(1, 2, 0).numpy()
         target = target_tensor.numpy()
