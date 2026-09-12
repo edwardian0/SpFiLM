@@ -63,8 +63,8 @@ from spfilm.metrics import CHANNEL_NAMES  # noqa: E402
 from spfilm.single_source import load_single_source_manifest  # noqa: E402
 
 
-DEFAULT_PLAIN_ARM = "stage3_lodo_fixed_budget_plain_unet"
-DEFAULT_FILM_ARM = "stage4_lodo_fixed_budget_global_film"
+DEFAULT_PLAIN_ARM = "stage4_lodo_fixed_budget_plain_unet_3dom"
+DEFAULT_FILM_ARM = "stage4_lodo_fixed_budget_global_film_3dom"
 
 
 # --------------------------------------------------------------------------
@@ -107,6 +107,34 @@ def load_arm(
                 f"missing={sorted(expected - scored)[:5]})"
             )
     return runs
+
+
+def require_same_folds(
+    plain_runs: Sequence[FixedRun], film_runs: Sequence[FixedRun]
+) -> None:
+    """Refuse to pair arms whose folds trained on different source domains.
+
+    Identical test images are necessary but not sufficient: the Stage 3 plain
+    runs score the same 50 held-out images as a Step 4 FiLM run but trained on
+    three domains including RIM-ONE-DL, so a difference between them would mix
+    "conditioning" with "which domains were available". Only a plain arm run
+    under the same active set is the honest pair.
+    """
+
+    plain_sources = {
+        run.held_out_domain: frozenset(run.source_domains) for run in plain_runs
+    }
+    for run in film_runs:
+        expected = plain_sources.get(run.held_out_domain)
+        if expected is None:
+            continue  # summarised alone; paired_tests only pairs shared domains
+        if frozenset(run.source_domains) != expected:
+            raise FixedLodoReportError(
+                f"{run.held_out_domain.value}: the FiLM arm trained on "
+                f"{sorted(run.source_domains)} but the plain arm on "
+                f"{sorted(expected)}; pass a plain arm run under the same "
+                "active domains (e.g. stage4_lodo_fixed_budget_plain_unet_3dom)"
+            )
 
 
 def build_two_arm_substrate(
@@ -298,9 +326,15 @@ def render_markdown_report(
         f"`{manifest_path.name}`. Interpretation is written by hand."
     )
     add("")
+    sources = len(film_runs[0].source_domains)
+    active = sorted({film_runs[0].held_out_domain.value, *film_runs[0].source_domains})
     add("## 1. Held-out Dice side by side")
     add("")
     add(
+        f"Leave-one-domain-out over {len(active)} domains (`{'`, `'.join(active)}`): "
+        f"train on {sources}, test on the held-out one, "
+        f"{film_runs[0].train_budget * sources} / {film_runs[0].val_budget * sources} / "
+        f"{film_runs[0].test_budget} images per fold. "
         "Same backbone, folds, budget, seeds, augmentation, optimiser and test images; "
         "the arms differ only in the conditioning. Δ is FiLM minus plain on per-image "
         f"Dice with seeds averaged first; p-values are {method}, Holm-adjusted over "
@@ -408,6 +442,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest_path = args.manifest.expanduser().resolve()
         plain = load_arm(roots, args.plain_arm, args.expected_seeds, manifest_path)
         film = load_arm(roots, args.film_arm, args.expected_seeds, manifest_path)
+        require_same_folds(plain, film)
         plain_cells = build_domain_cells(plain)
         film_cells = build_domain_cells(film)
         substrate = build_two_arm_substrate(plain, film)

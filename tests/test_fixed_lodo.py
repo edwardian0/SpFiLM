@@ -108,6 +108,52 @@ class FoldShapeTests(unittest.TestCase):
             )
 
 
+class ActiveDomainTests(unittest.TestCase):
+    """Step 4 drops RIM-ONE-DL: folds are composed from the active subset only."""
+
+    ACTIVE = (Domain.DRISHTI_GS, Domain.REFUGE_CANON_VAL, Domain.REFUGE_ZEISS)
+
+    def setUp(self) -> None:
+        self.manifest = _synthetic_manifest()
+        self.folds = fixed_lodo_folds(self.manifest, self.ACTIVE)
+
+    def test_one_fold_per_active_domain_and_none_for_the_inactive_one(self) -> None:
+        self.assertEqual(
+            [fold.held_out_domain for fold in self.folds],
+            sorted(self.ACTIVE, key=lambda item: item.value),
+        )
+        self.assertNotIn(Domain.RIM_ONE_DL, {fold.held_out_domain for fold in self.folds})
+
+    def test_folds_train_on_two_and_test_on_one(self) -> None:
+        for fold in self.folds:
+            sources = {sample.domain for sample in fold.train}
+            self.assertEqual(sources, set(self.ACTIVE) - {fold.held_out_domain})
+            self.assertEqual(len(sources), 2)
+            self.assertEqual(len(fold.train), 2 * TRAIN_BUDGET)
+            self.assertEqual(len(fold.val), 2 * VAL_BUDGET)
+            self.assertEqual(len(fold.test), TEST_BUDGET)
+
+    def test_inactive_domain_never_appears_anywhere(self) -> None:
+        for fold in self.folds:
+            for partition in (fold.train, fold.val, fold.test):
+                self.assertFalse(any(s.domain == Domain.RIM_ONE_DL for s in partition))
+
+    def test_held_out_test_sets_are_identical_to_the_four_domain_protocol(self) -> None:
+        """Dropping a source must not move the 50 images a domain is scored on."""
+
+        four = {fold.held_out_domain: fold.test for fold in fixed_lodo_folds(self.manifest)}
+        for fold in self.folds:
+            self.assertEqual(fold.test, four[fold.held_out_domain])
+
+    def test_none_means_every_manifest_domain(self) -> None:
+        self.assertEqual(fixed_lodo_folds(self.manifest), fixed_lodo_folds(self.manifest, None))
+        self.assertEqual(len(fixed_lodo_folds(self.manifest)), len(Domain))
+
+    def test_fewer_than_two_active_domains_is_refused(self) -> None:
+        with self.assertRaises(Stage3ConfigError):
+            fixed_lodo_folds(self.manifest, (Domain.DRISHTI_GS,))
+
+
 class PairingTests(unittest.TestCase):
     """The two arms must score identical images, or the comparison is not paired."""
 

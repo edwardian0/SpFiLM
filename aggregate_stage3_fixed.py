@@ -221,6 +221,18 @@ def select_fixed_runs(
         raise FixedLodoReportError(
             f"Runs disagree on manifest_sha256: {sorted(digests)}"
         )
+    # One arm, one domain set: every run's held-out domain plus its sources must
+    # be the same set, or a four-domain fold is being averaged with a
+    # three-domain one under the same name.
+    active_sets = {
+        frozenset({run.held_out_domain.value, *run.source_domains})
+        for run in selected
+    }
+    if len(active_sets) != 1:
+        raise FixedLodoReportError(
+            "Runs disagree on the active domain set: "
+            f"{sorted(sorted(active) for active in active_sets)}"
+        )
     budgets = {(r.train_budget, r.val_budget, r.test_budget) for r in selected}
     if len(budgets) != 1:
         raise FixedLodoReportError(f"Runs disagree on the fixed budget: {sorted(budgets)}")
@@ -644,6 +656,7 @@ def render_markdown_report(
 ) -> str:
     run = fixed_runs[0]
     seeds = sorted({r.run_seed for r in fixed_runs})
+    sources = len(run.source_domains)
     lines: list[str] = []
     add = lines.append
 
@@ -663,9 +676,9 @@ def render_markdown_report(
     add("")
     add(
         "Leave-one-domain-out under a fixed labelled budget. For each held-out "
-        f"domain the model trains on the other three domains' budgeted "
-        f"partitions — **{run.train_budget} images from each, {run.train_budget * 3} "
-        f"in total** — validates on their pooled **{run.val_budget * 3}**, and is "
+        f"domain the model trains on the other {sources} domains' budgeted "
+        f"partitions — **{run.train_budget} images from each, {run.train_budget * sources} "
+        f"in total** — validates on their pooled **{run.val_budget * sources}**, and is "
         f"scored on the held-out domain's **{run.test_budget}** locked test "
         "images with no adaptation."
     )
@@ -683,7 +696,7 @@ def render_markdown_report(
     add(f"| Seeds | {', '.join(str(s) for s in seeds)} |")
     add(f"| Runs | {len(fixed_runs)} |")
     add(
-        f"| Train / val / test | {run.train_budget * 3} / {run.val_budget * 3} / "
+        f"| Train / val / test | {run.train_budget * sources} / {run.val_budget * sources} / "
         f"{run.test_budget} |"
     )
     add("| Checkpoint selection | lowest pooled source validation loss |")

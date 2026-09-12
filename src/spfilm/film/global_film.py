@@ -10,7 +10,10 @@ what makes it "global". ``s`` is a frozen one-hot embedding of the domain with n
 learned parameters, and a three-layer MLP (256, 256, 2C) maps it to gamma and
 beta, exactly as in the draft and in Perez et al.'s reference code (whose
 ``gamma_baseline=1`` is the ``1 +`` here). gamma and beta are clamped to
-[-clamp, clamp] as the draft does for numerical stability.
+[-clamp, clamp] as the draft does for numerical stability, and the whole
+modulation runs in float32 even under autocast, as the reference
+implementation does: one overflowing channel in half precision is enough to
+turn the affine into NaN.
 
 SpFiLM with K=0 must reproduce this layer numerically; keep them aligned.
 """
@@ -89,7 +92,8 @@ class GlobalFiLM(nn.Module):
             raise ValueError(
                 f"embedding must be (N, embedding_dim), got {tuple(embedding.shape)}"
             )
-        parameters = self.generator(embedding)
+        with torch.autocast(device_type=embedding.device.type, enabled=False):
+            parameters = self.generator(embedding.float())
         gamma, beta = torch.split(parameters, self.num_channels, dim=1)
         return (
             gamma.clamp(-self.clamp, self.clamp),
@@ -108,6 +112,8 @@ class GlobalFiLM(nn.Module):
                 f"{embedding.shape[0]} embeddings"
             )
         gamma, beta = self.gamma_beta(embedding)
-        gamma = gamma.to(features.dtype)[:, :, None, None]
-        beta = beta.to(features.dtype)[:, :, None, None]
-        return (1.0 + gamma) * features + beta
+        with torch.autocast(device_type=features.device.type, enabled=False):
+            modulated = (1.0 + gamma[:, :, None, None]) * features.float() + beta[
+                :, :, None, None
+            ]
+        return modulated.to(features.dtype)

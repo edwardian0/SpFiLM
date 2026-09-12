@@ -63,10 +63,12 @@ from spfilm.stage3_single_source import Stage3SingleSourceConfig  # noqa: E402
 
 import run_stage3_lodo_1_3  # noqa: E402
 
-PLAIN_CONFIG = PROJECT_ROOT / "configs" / "stage3_lodo_fixed.json"
-FILM_CONFIG = PROJECT_ROOT / "configs" / "stage4_global_film.json"
-PLAIN_CREATE = PROJECT_ROOT / "configs" / "stage3_lodo_fixed_create.json"
-FILM_CREATE = PROJECT_ROOT / "configs" / "stage4_global_film_create.json"
+STAGE3_CONFIG = PROJECT_ROOT / "configs" / "stage3_lodo_fixed.json"
+PLAIN_CONFIG = PROJECT_ROOT / "configs" / "stage4_plain_3dom.json"
+FILM_CONFIG = PROJECT_ROOT / "configs" / "stage4_global_film_3dom.json"
+PLAIN_CREATE = PROJECT_ROOT / "configs" / "stage4_plain_3dom_create.json"
+FILM_CREATE = PROJECT_ROOT / "configs" / "stage4_global_film_3dom_create.json"
+STEP4_ACTIVE = {Domain.REFUGE_ZEISS, Domain.REFUGE_CANON_VAL, Domain.DRISHTI_GS}
 
 
 def _zero_generator_output(layer: GlobalFiLM) -> None:
@@ -113,6 +115,16 @@ class GlobalFiLMTests(unittest.TestCase):
         gamma_a, _ = self.layer.gamma_beta(self.one_hot(torch.tensor([0])))
         gamma_b, _ = self.layer.gamma_beta(self.one_hot(torch.tensor([1])))
         self.assertFalse(torch.allclose(gamma_a, gamma_b))
+
+    def test_modulation_runs_in_float32_under_autocast(self) -> None:
+        """Matches the reference implementation: half precision must not reach the affine."""
+
+        embedding = self.one_hot(torch.tensor([0, 1]))
+        reference = self.layer(self.features, embedding)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            under_autocast = self.layer(self.features, embedding)
+        self.assertEqual(under_autocast.dtype, self.features.dtype)
+        self.assertTrue(torch.allclose(under_autocast, reference, atol=1e-6))
 
     def test_one_hot_is_frozen_basis_vectors(self) -> None:
         codes = self.one_hot(torch.tensor([0, 3]))
@@ -453,17 +465,32 @@ def _write_temp_config(payload: dict) -> Path:
 
 @unittest.skipUnless(PLAIN_CONFIG.is_file() and FILM_CONFIG.is_file(), "configs not present")
 class Stage4ConfigTests(unittest.TestCase):
-    FILM_ONLY_KEYS = {"arm", "film", "experiment_name", "output_dir"}
-    PROTOCOL_ONLY_KEYS = {"policy", "paired_arm", "pairing_rationale"}
+    ARM_ONLY_KEYS = {"arm", "film", "experiment_name", "output_dir"}
+    PROTOCOL_ARM_ONLY_KEYS = {"policy", "paired_arm"}
 
     def test_film_configs_load_with_the_global_film_arm(self) -> None:
         for path in (FILM_CONFIG, FILM_CREATE):
             config = _load(path)
             self.assertEqual(config.arm, "global_film")
-            self.assertEqual(config.experiment_name, "stage4_lodo_fixed_budget_global_film")
-            self.assertEqual(config.paired_arm, "stage3_lodo_fixed_budget_plain_unet")
+            self.assertEqual(config.experiment_name, "stage4_lodo_fixed_budget_global_film_3dom")
+            self.assertEqual(config.paired_arm, "stage4_lodo_fixed_budget_plain_unet_3dom")
             self.assertEqual(config.film_levels, 5)
             self.assertEqual(config.test_conditioning, "nearest_domain")
+
+    def test_plain_configs_load_and_point_back_at_the_film_arm(self) -> None:
+        for path in (PLAIN_CONFIG, PLAIN_CREATE):
+            config = _load(path)
+            self.assertEqual(config.arm, "plain")
+            self.assertEqual(config.experiment_name, "stage4_lodo_fixed_budget_plain_unet_3dom")
+            self.assertEqual(config.paired_arm, "stage4_lodo_fixed_budget_global_film_3dom")
+
+    def test_step4_drops_rim_one_from_the_folds_but_keeps_it_configured(self) -> None:
+        for path in (PLAIN_CONFIG, FILM_CONFIG, PLAIN_CREATE, FILM_CREATE):
+            config = _load(path)
+            self.assertEqual(set(config.active_domains), STEP4_ACTIVE, path.name)
+            self.assertNotIn(Domain.RIM_ONE_DL, config.held_out_domains)
+            # still discovered and validated: the locked manifests cover it
+            self.assertEqual({d.domain for d in config.domains}, set(Domain))
 
     def test_film_configs_differ_from_plain_only_in_the_conditioning(self) -> None:
         """Change one thing: everything but the arm must be byte-for-byte the plain protocol."""
@@ -471,13 +498,28 @@ class Stage4ConfigTests(unittest.TestCase):
         for plain_path, film_path in ((PLAIN_CONFIG, FILM_CONFIG), (PLAIN_CREATE, FILM_CREATE)):
             plain = json.loads(plain_path.read_text())
             film = json.loads(film_path.read_text())
-            for key in self.FILM_ONLY_KEYS:
+            for key in self.ARM_ONLY_KEYS:
                 plain.pop(key, None)
                 film.pop(key, None)
-            for key in self.PROTOCOL_ONLY_KEYS:
+            for key in self.PROTOCOL_ARM_ONLY_KEYS:
                 plain["protocol"].pop(key, None)
                 film["protocol"].pop(key, None)
             self.assertEqual(plain, film, f"{film_path.name} drifts from {plain_path.name}")
+
+    def test_step4_configs_share_the_stage3_hyperparameters(self) -> None:
+        """Only the domain set and the arm change relative to the Stage 3 plain arm."""
+
+        if not STAGE3_CONFIG.is_file():
+            self.skipTest("stage 3 config not present")
+        stage3 = json.loads(STAGE3_CONFIG.read_text())
+        step4 = json.loads(PLAIN_CONFIG.read_text())
+        for key in ("image_size", "batch_size", "epochs", "patience", "min_epochs",
+                    "early_stopping_mode", "learning_rate", "weight_decay", "base_channels",
+                    "threshold", "horizontal_flip_probability", "rotation_degrees",
+                    "brightness_contrast", "domains"):
+            self.assertEqual(stage3[key], step4[key], key)
+        self.assertEqual(stage3["protocol"]["budget"], step4["protocol"]["budget"])
+        self.assertEqual(stage3["protocol"]["seeds"], step4["protocol"]["seeds"])
 
     def test_training_config_forwards_the_film_settings(self) -> None:
         engine_config = _load(FILM_CONFIG).training_config(Domain.REFUGE_ZEISS, 42, "artifacts/x")
@@ -486,6 +528,21 @@ class Stage4ConfigTests(unittest.TestCase):
         self.assertEqual(engine_config.film_clamp, 5.0)
         plain_config = _load(PLAIN_CONFIG).training_config(Domain.REFUGE_ZEISS, 42, "artifacts/x")
         self.assertEqual(plain_config.arm, "plain")
+
+    def test_legacy_prose_paired_arm_reads_as_unstated(self) -> None:
+        if not STAGE3_CONFIG.is_file():
+            self.skipTest("stage 3 config not present")
+        self.assertIsNone(_load(STAGE3_CONFIG).paired_arm)
+
+    def test_protocol_domain_list_must_be_configured_and_at_least_two(self) -> None:
+        payload = json.loads(PLAIN_CONFIG.read_text())
+        payload["protocol"][CONFIG_DOMAINS_KEY] = ["refuge_zeiss"]
+        with self.assertRaises(Stage3ConfigError):
+            _load(_write_temp_config(payload))
+        payload = json.loads(PLAIN_CONFIG.read_text())
+        payload["domains"].pop("rim_one_dl")
+        with self.assertRaises(Stage3ConfigError):
+            _load(_write_temp_config(payload))
 
     def test_unknown_arm_is_refused(self) -> None:
         payload = json.loads(FILM_CONFIG.read_text())

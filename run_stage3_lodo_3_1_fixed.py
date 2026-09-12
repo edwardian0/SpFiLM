@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
-"""Fixed-budget leave-one-domain-out: train on three domains, test on the fourth.
+"""Fixed-budget leave-one-domain-out: hold one domain out, train on the others.
+
+Which domains take part is the config's ``protocol.held_out_domains`` list (the
+*active* set); every listed domain is held out in turn and the remaining listed
+domains are the sources. The Stage 3 configs list all four domains (train on
+three, test on the fourth). The Step 4 configs drop RIM-ONE-DL for now and list
+three, so each fold trains on two and tests on the third; RIM-ONE-DL stays
+discovered and validated because the locked manifests cover it, it simply does
+not enter a fold. Each domain's budgeted partitions are the same either way, so
+a held-out domain's 50 test images are identical across both protocols and
+across the plain and Global FiLM arms.
 
 This is the paired counterpart to ``run_stage3_lodo_1_3.py``. Both arms draw
 their membership from the same committed budgeted manifest, so for a given
 held-out domain the 50 test images here are *the same 50 images* the train-on-one
-arm scored. The only difference between the arms is training volume:
+arm scored. Under the four-domain protocol the only difference between those
+arms is training volume:
 
     train-on-one    40 train, 10 val   -> scored on each unseen domain's 50
     train-on-three  120 train, 30 val  -> scored on the held-out domain's 50
@@ -80,17 +91,18 @@ CONFIG_STAGE = "lodo_fixed_budget"
 CONFIG_DOMAINS_KEY = "held_out_domains"
 FIXED_LODO_PROTOCOL_NAME = "leave_one_domain_out_fixed_budget"
 FIXED_LODO_SPLIT_POLICY = (
-    "fixed-budget LODO: each source domain contributes its budgeted train and "
-    "val partitions; the held-out domain's budgeted test partition is the only "
-    "test set; source tests and held-out train/val excluded"
+    "fixed-budget LODO over the config's active domains: each active source "
+    "domain contributes its budgeted train and val partitions; the held-out "
+    "domain's budgeted test partition is the only test set; source tests, "
+    "held-out train/val, and inactive domains excluded"
 )
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Stage 3 plain-U-Net leave-one-domain-out under the same fixed "
-            "budget as the train-on-one arm"
+            "Fixed-budget leave-one-domain-out over the config's active domains "
+            "(plain or Global FiLM arm), paired with the train-on-one arm"
         )
     )
     parser.add_argument(
@@ -186,19 +198,49 @@ def _write_json(path: Path, payload: object) -> Path:
     return path
 
 
-def fixed_lodo_folds(manifest: SingleSourceManifest) -> tuple[LodoFold, ...]:
+def fixed_lodo_folds(
+    manifest: SingleSourceManifest,
+    active_domains: Sequence[Domain] | None = None,
+) -> tuple[LodoFold, ...]:
     """Compose the LODO folds from the shared budgeted partitions.
 
     No new composition logic: the existing, already-tested ``compose_all_lodo_folds``
     is applied to partitions that have been capped to the common budget, which is
-    what makes every fold 120/30/50 instead of the original arm's 552-852/51-97.
+    what makes every fold (sources x 40)/(sources x 10)/50 instead of the original
+    arm's 552-852/51-97. ``active_domains`` restricts the partitions that take
+    part; ``None`` means every domain in the manifest.
     """
 
-    return compose_all_lodo_folds(manifest.budgeted_partitions)
+    partitions = manifest.budgeted_partitions
+    if active_domains is not None:
+        active = set(active_domains)
+        missing = sorted(active - {partition.domain for partition in partitions})
+        if missing:
+            raise Stage3DataError(
+                "Active domains absent from the budgeted manifest: "
+                f"{[domain.value for domain in missing]}"
+            )
+        partitions = tuple(
+            partition for partition in partitions if partition.domain in active
+        )
+        if len(partitions) < 2:
+            raise Stage3ConfigError(
+                "Leave-one-domain-out needs at least two active domains, got "
+                f"{[partition.domain.value for partition in partitions]}"
+            )
+    return compose_all_lodo_folds(partitions)
 
 
-def _manifest_summary(manifest: SingleSourceManifest) -> dict[str, object]:
+def _manifest_summary(
+    manifest: SingleSourceManifest, config: Stage3SingleSourceConfig
+) -> dict[str, object]:
     return {
+        "active_domains": [domain.value for domain in config.active_domains],
+        "inactive_domains": [
+            partition.domain.value
+            for partition in manifest.budgeted_partitions
+            if partition.domain not in set(config.active_domains)
+        ],
         "budget": {
             "train": manifest.train_budget,
             "val": manifest.val_budget,
@@ -217,7 +259,7 @@ def _manifest_summary(manifest: SingleSourceManifest) -> dict[str, object]:
                 name: len(getattr(fold, name))
                 for name in ("train", "val", "test")
             }
-            for fold in fixed_lodo_folds(manifest)
+            for fold in fixed_lodo_folds(manifest, config.active_domains)
         },
     }
 
@@ -268,7 +310,7 @@ def check(config: Stage3SingleSourceConfig, skip_mask_audit: bool) -> int:
             domain.value: len(records)
             for domain, records in sorted(records_by_domain.items())
         },
-        **_manifest_summary(manifest),
+        **_manifest_summary(manifest, config),
     }
     if skip_mask_audit:
         report["mask_audit"] = "SKIPPED by explicit flag"
@@ -352,7 +394,7 @@ def _run_one(
 ) -> dict[str, Any]:
     fold = next(
         fold
-        for fold in fixed_lodo_folds(manifest)
+        for fold in fixed_lodo_folds(manifest, config.active_domains)
         if fold.held_out_domain == held_out_domain
     )
     locked_splits = fold_record_splits(fold, records_by_key)
@@ -375,14 +417,16 @@ def _run_one(
     )
     device = choose_device(engine_config.requested_device)
     source_domains = sorted({record.domain for record in locked_splits["train"]})
+    active_domains = [domain.value for domain in config.active_domains]
     print(
-        f"Stage 3 fixed-budget LODO | arm={config.arm} | "
+        f"Fixed-budget LODO | arm={config.arm} | "
+        f"train on {len(source_domains)}, test on 1 | "
         f"held out={held_out_domain.value} | seed={seed} | device={device} | "
         f"{'SMOKE' if smoke else 'FULL'}",
         flush=True,
     )
     print(
-        f"sources={source_domains} | locked splits "
+        f"active domains={active_domains} | sources={source_domains} | locked splits "
         + ", ".join(
             f"{name}={len(locked_splits[name])}" for name in ("train", "val", "test")
         ),
@@ -417,6 +461,11 @@ def _run_one(
         "arm": config.experiment_name,
         "held_out_domain": held_out_domain.value,
         "source_domains": source_domains,
+        # The protocol's domain set. Folds are composed from these alone; a
+        # configured domain outside this list (RIM-ONE-DL in Step 4) is
+        # discovered and validated but never trained on or tested.
+        "active_domains": active_domains,
+        "fold_shape": f"train on {len(source_domains)}, test on 1",
         "run_seed": seed,
         "budget": {
             "train": config.train_budget,
@@ -428,11 +477,8 @@ def _run_one(
         # The plain arm is paired with the train-on-one arm (training volume is
         # the variable); a conditioned arm names the plain fixed-budget arm it is
         # paired with (conditioning is the variable). Same manifest either way.
-        "paired_with": (
-            "stage3_single_source_plain_unet"
-            if config.arm == "plain"
-            else config.paired_arm
-        ),
+        "paired_with": config.paired_arm
+        or ("stage3_single_source_plain_unet" if config.arm == "plain" else None),
         "source_test_policy": "exclude",
         "manifest_path": str(manifest_path),
         "manifest_sha256": _sha256(manifest_path),
@@ -469,7 +515,8 @@ def _run_one(
     )
     test_metrics = report["test"]
     print(
-        f"held-out {held_out_domain.value} test Dice: "
+        f"held-out {held_out_domain.value} (trained on {', '.join(source_domains)}) "
+        "test Dice: "
         f"disc={test_metrics['disc']['dice_mean']:.4f} "
         f"cup={test_metrics['cup']['dice_mean']:.4f} "
         f"n={test_metrics['evaluated_sample_count']}",

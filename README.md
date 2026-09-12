@@ -93,32 +93,48 @@ commit the same manifest before submitting. Its current wall time must cover the
 configured 300 epochs: `early_stopping_mode: monitor` selects a checkpoint but
 does not shorten training.
 
-## Stage 4 (Step 4) quick start: Global FiLM
+## Stage 4 (Step 4) quick start: Global FiLM over three domains
 
 Step 4 adds the honest baseline: channel-wise (global) FiLM after each encoder
-block of the *same* U-Net, trained with the true source-domain code. Under
-leave-one-domain-out the held-out domain has no code the model was trained
-with, so at test time each image gets the code of the source domain whose
-training appearance it is nearest to (`src/spfilm/film/conditioning.py`; the
-policy agreed with the supervisor). The FiLM layer itself is
-`src/spfilm/film/global_film.py` and is the K=0 case SpFiLM must reduce to.
+block of the *same* U-Net, trained with the true source-domain code. It runs
+leave-one-domain-out over **three domains, RIM-ONE-DL dropped for now**: each
+fold trains on two domains (80 train / 20 val) and tests on the third (50).
+RIM-ONE-DL stays under `domains` so the locked four-domain manifests still
+validate; the protocol's `held_out_domains` list is the *active* set and folds
+are composed from it alone. Each domain's budgeted partitions are unchanged, so
+a held-out domain's 50 test images are the same ones Stage 3 scored.
 
-`configs/stage4_global_film*.json` are the fixed-budget Stage 3 configs with
-`arm` changed to `global_film` and a `film` block; every other setting is
-identical, and `tests/test_global_film.py` asserts that. The runner is the same
-`run_stage3_lodo_3_1_fixed.py`:
+Under leave-one-domain-out the held-out domain has no code the model was
+trained with, so at test time each image gets the code of the source domain
+whose training appearance it is nearest to (`src/spfilm/film/conditioning.py`;
+the policy agreed with the supervisor). The FiLM layer itself is
+`src/spfilm/film/global_film.py`, matches the reference implementation
+(`p-singh-kcl/spatial_film_parcellation`, `models/film_mlp.py`) block for block,
+and is the K=0 case SpFiLM must reduce to.
+
+Because the Stage 3 plain runs trained on RIM-ONE-DL, they are **not** the pair
+for this arm. Step 4 therefore has two configs that differ only in `arm` (a test
+asserts this): `stage4_plain_3dom*.json` re-runs the plain U-Net under the
+three-domain folds and `stage4_global_film_3dom*.json` adds FiLM. Both use the
+same `run_stage3_lodo_3_1_fixed.py`:
 
 ```bash
 .spfilm/bin/python run_stage3_lodo_3_1_fixed.py \
-  --config configs/stage4_global_film.json run \
-  --held-out-domain refuge_zeiss --seed 42 --smoke --device cpu
+  --config configs/stage4_global_film_3dom.json check --skip-mask-audit
 
-sbatch --time=0-00:20:00 submit_stage4_global_film.sh refuge_zeiss 42 --smoke
-sbatch submit_stage4_global_film.sh refuge_zeiss 42
+.spfilm/bin/python run_stage3_lodo_3_1_fixed.py \
+  --config configs/stage4_global_film_3dom.json run \
+  --held-out-domain drishti_gs --seed 42 --smoke --device cpu
+
+sbatch --time=0-00:20:00 submit_stage4_global_film.sh drishti_gs 42 --smoke
+sbatch submit_stage4_plain.sh drishti_gs 42
+sbatch submit_stage4_global_film.sh drishti_gs 42
 ```
 
-Put the arm next to Step 3 (FiLM minus plain on identical test images; a
-partial FiLM grid pairs against the same seeds of the plain arm):
+The full protocol is 3 domains x 5 seeds x 2 arms = 30 submissions. Put the
+arms next to each other (FiLM minus plain on identical test images; the tool
+refuses to pair arms that trained on different source sets, and a partial grid
+pairs against the same seeds of the other arm):
 
 ```bash
 .spfilm/bin/python aggregate_stage4_film.py --expected-seeds 42 \
@@ -126,7 +142,8 @@ partial FiLM grid pairs against the same seeds of the plain arm):
 ```
 
 `aggregate_stage3_fixed.py` now needs `--arm <experiment_name>` once a run root
-holds both arms; it refuses to mix them.
+holds more than one arm; it refuses to mix them, and refuses runs that disagree
+on the active domain set.
 
 ### Stage 4 output contract
 

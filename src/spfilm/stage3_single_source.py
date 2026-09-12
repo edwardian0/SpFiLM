@@ -77,13 +77,27 @@ class Stage3SingleSourceConfig:
     def held_out_domains(self) -> tuple[Domain, ...]:
         """The same configured domain list, named for the LODO arm.
 
-        The fixed-budget train-on-three arm rotates each domain through the
-        held-out role; the train-on-one arm rotates each through the source role.
-        The list is identical, so one config field backs both and the two arms
-        cannot drift onto different domain sets.
+        The fixed-budget LODO arm rotates each listed domain through the
+        held-out role and trains on the others; the train-on-one arm rotates
+        each through the source role. The list is identical, so one config
+        field backs both and the two arms cannot drift onto different domain
+        sets.
         """
 
         return self.source_domains
+
+    @property
+    def active_domains(self) -> tuple[Domain, ...]:
+        """The domains that take part in folds, in canonical order.
+
+        This is the protocol's domain list. It may be a subset of the
+        ``domains`` block: every domain in the closed enum stays configured so
+        the locked manifests (which cover all of them) still validate, while a
+        protocol can leave one out of its folds -- Step 4 drops RIM-ONE-DL and
+        runs leave-one-domain-out over the remaining three, training on two.
+        """
+
+        return tuple(sorted(self.source_domains, key=lambda domain: domain.value))
 
     @classmethod
     def from_json(
@@ -123,6 +137,12 @@ class Stage3SingleSourceConfig:
             raise Stage3ConfigError(
                 "protocol.paired_arm must be a non-empty string when present"
             )
+        if paired_arm is not None and any(char.isspace() for char in paired_arm):
+            # The original Stage 3 config wrote a sentence here rather than an
+            # experiment name. Treat prose as "not stated" so the runner falls
+            # back to its historical default and existing run metadata stays
+            # byte-identical.
+            paired_arm = None
         if protocol.get("source_test_policy") != "exclude":
             raise Stage3ConfigError(
                 "protocol.source_test_policy must be 'exclude'"
@@ -137,6 +157,11 @@ class Stage3SingleSourceConfig:
         )
         if len(source_domains) != len(set(source_domains)):
             raise Stage3ConfigError(f"protocol.{domains_key} contains duplicates")
+        if len(source_domains) < 2:
+            raise Stage3ConfigError(
+                f"protocol.{domains_key} needs at least two domains: one held "
+                "out and at least one source"
+            )
 
         raw_seeds = protocol.get("seeds")
         if not isinstance(raw_seeds, list) or not raw_seeds:
@@ -179,14 +204,20 @@ class Stage3SingleSourceConfig:
             )
         )
         configured_domains = {config.domain for config in domain_configs}
-        if configured_domains != set(source_domains):
-            raise Stage3ConfigError(
-                "Configured domains must exactly match protocol.source_domains"
-            )
         if configured_domains != set(Domain):
+            # Every domain stays configured because the locked parent and
+            # budgeted manifests cover the whole enum and are rebuilt from this
+            # block to prove nothing drifted. Which domains take part in folds
+            # is the protocol list's job.
             raise Stage3ConfigError(
-                "Stage 3 single-source requires every domain in the closed "
-                "Domain enum"
+                "Stage 3 requires every domain in the closed Domain enum under "
+                "'domains' so the locked manifests can be revalidated"
+            )
+        unconfigured = sorted(set(source_domains) - configured_domains)
+        if unconfigured:
+            raise Stage3ConfigError(
+                f"protocol.{domains_key} names domains without a configuration: "
+                f"{[domain.value for domain in unconfigured]}"
             )
 
         config = cls(
