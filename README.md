@@ -105,9 +105,15 @@ are composed from it alone. Each domain's budgeted partitions are unchanged, so
 a held-out domain's 50 test images are the same ones Stage 3 scored.
 
 Under leave-one-domain-out the held-out domain has no code the model was
-trained with, so at test time each image gets the code of the source domain
-whose training appearance it is nearest to (`src/spfilm/film/conditioning.py`;
-the policy agreed with the supervisor). The FiLM layer itself is
+trained with. At test time the whole held-out domain gets **one** code: the
+source domain whose training colour statistics are nearest to the mean
+statistics of the held-out domain's unlabelled reference sample (its budgeted
+training partition, labels unused, disjoint from the test images). That is the
+policy agreed with the supervisor on 2026-09-12 — decided once per domain, so it
+is simple to state in a paper. The per-image variant
+(`film.test_conditioning: "nearest_image"`) is kept as an ablation, and every
+run logs how each test image would individually have been assigned
+(`src/spfilm/film/conditioning.py`). The FiLM layer itself is
 `src/spfilm/film/global_film.py`, matches the reference implementation
 (`p-singh-kcl/spatial_film_parcellation`, `models/film_mlp.py`) block for block,
 and is the K=0 case SpFiLM must reduce to.
@@ -145,17 +151,57 @@ pairs against the same seeds of the other arm):
 holds more than one arm; it refuses to mix them, and refuses runs that disagree
 on the active domain set.
 
+### Train on all domains, test on each (third Step 4 regime)
+
+Asked for by the supervisor on 2026-09-12 and confirmed on 2026-09-13: one model
+per seed trained on the pooled budgeted train partitions of the three active
+domains (120 / 30), scored on each domain's own 50 test images. Nothing is held
+out, so the FiLM arm trains and tests with the true domain code (codes 0/1/2) —
+the SpFiLM draft's "both" regime. It asks whether conditioning helps when the
+camera is known; the per-domain fixed-code sweep (each test set scored under
+every other code) measures the **wrong-code penalty**, i.e. whether the network
+uses the code at all. Each domain's test images are the same 50 the LODO arms
+score. Runner, configs and submit scripts:
+
+```bash
+.spfilm/bin/python run_stage4_all_domains.py \
+  --config configs/stage4_all_domains_global_film_3dom.json check --skip-mask-audit
+
+.spfilm/bin/python run_stage4_all_domains.py \
+  --config configs/stage4_all_domains_global_film_3dom.json run --seed 42 --smoke --device cpu
+
+sbatch --time=0-00:20:00 submit_stage4_all_domains_film.sh 42 --smoke
+sbatch submit_stage4_all_domains_plain.sh 42
+sbatch submit_stage4_all_domains_film.sh 42
+```
+
+5 seeds x 2 arms = 10 submissions. `test_metrics.json` reports `test_by_domain`
+(the result) and renames the pooled score to `test_pooled` so it is never
+quoted. Aggregate with:
+
+```bash
+.spfilm/bin/python aggregate_stage4_all_domains.py --expected-seeds 42 \
+  --report-out run_reports/stage4_all_domains.md
+```
+
 ### Stage 4 output contract
 
 A Global FiLM run writes the Stage 3 artifacts plus:
 
 - `domain_selector.json`: the fold's code vocabulary and the nearest-domain
   reference statistics (also stored inside both checkpoints).
+- `conditioning.domain_decision` in `test_metrics.json`: the code chosen for
+  the held-out domain, the distances that chose it, and the reference images
+  it was decided from (`fixed_lodo.conditioning_reference` records the
+  partition and that labels were not used).
 - `test_conditioning_per_image.csv`: per held-out image, the code used, the
-  distance to every source centroid, and the descriptor.
+  source it would individually be nearest to, the distance to every source
+  centroid, and the descriptor.
 - `val_selector_per_image.csv`: the selector run on source validation images,
   whose true domain is known; `conditioning.selector_validation` in
-  `test_metrics.json` gives its accuracy and confusion.
+  `test_metrics.json` gives the per-image accuracy and confusion and, under
+  `domain_level`, whether the per-domain rule recovers each source domain from
+  its own validation images.
 - `test_fixed_code_<domain>_per_image_metrics.csv`: the held-out set scored
   once under each source code; `conditioning.fixed_code_sweep` summarises it
   and `nearest_domain_minus_best_fixed_code_dice` says whether the selector
@@ -181,12 +227,15 @@ spfilm/
 │   ├── model.py                        # plain 2D U-Net and its FiLM-conditioned wrapper
 │   ├── film/global_film.py             # channel-wise FiLM layer (Step 4)
 │   ├── film/conditioning.py            # domain codes; nearest-source-domain rule at test
+│   ├── all_domains.py                  # train-on-all fold: pooled train/val, per-domain tests
 │   └── visualization.py                # mask and prediction QA figures
 ├── tests/                              # fast contract and shape tests
 ├── run_stage2.py                       # audit / inspect / train / all CLI
 ├── run_stage3_lodo.py                  # prepare / check / run LODO CLI
 ├── run_stage3_lodo_3_1_fixed.py        # fixed-budget LODO runner, plain and global_film arms
-├── aggregate_stage4_film.py            # FiLM next to plain: paired test + selector diagnostics
+├── aggregate_stage4_film.py            # LODO: FiLM next to plain, paired test, selector diagnostics
+├── run_stage4_all_domains.py           # train on all active domains, test on each (both arms)
+├── aggregate_stage4_all_domains.py     # train-on-all: FiLM next to plain + wrong-code penalty
 ├── submit_lodo_stage3.sh               # one CREATE fold/seed submission
 ├── STAGE2.md                           # research and execution protocol
 └── artifacts/                          # generated locally

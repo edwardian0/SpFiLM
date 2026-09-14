@@ -171,6 +171,8 @@ class ConditionedUNet(nn.Module):
         features = net.up4(features, skip1)
         return net.output(features)
 
+class SpatialFiLMUNet():
+    pass
 
 ARMS = ("plain", "global_film")
 
@@ -204,5 +206,3 @@ def build_model(
     
     raise ValueError(f"Unknown arm {arm!r}; expected one of {ARMS}")
 
-class SpatialFiLMUNet():
-    pass

@@ -169,8 +169,12 @@ class ConditioningCell:
     held_out_domain: Domain
     seeds: tuple[int, ...]
     vocabulary: tuple[str, ...]
-    selector_val_accuracy: float
-    assignment_counts: Mapping[str, float]  # mean over seeds
+    test_conditioning: str
+    chosen_code: str | None  # the per-domain decision (same across seeds)
+    selector_val_accuracy: float  # per-image rule on source validation images
+    selector_domain_accuracy: float | None  # per-domain rule on source validation images
+    assignment_counts: Mapping[str, float]  # codes actually used, mean over seeds
+    nearest_image_counts: Mapping[str, float] | None  # per-image rule, diagnostic
     nearest_minus_best: Mapping[str, float]  # per structure, mean over seeds
     sweep_spread: Mapping[str, float]  # per structure: max - min fixed-code Dice
     best_fixed_code: Mapping[str, Mapping[str, int]]  # structure -> code -> votes
@@ -197,11 +201,36 @@ def build_conditioning_cells(film_runs: Sequence[FixedRun]) -> tuple[Conditionin
                 f"{domain.value}: seeds disagree on the code vocabulary {sorted(vocabularies)}"
             )
         vocabulary = next(iter(vocabularies))
+        policies = {str(p["test_conditioning"]) for p in payloads}
+        if len(policies) != 1:
+            raise FixedLodoReportError(
+                f"{domain.value}: seeds disagree on test_conditioning {sorted(policies)}"
+            )
+        decisions = {
+            (p.get("domain_decision") or {}).get("chosen_domain") for p in payloads
+        }
+        if len(decisions) != 1:
+            # The decision depends only on the fold's images, so seeds must agree.
+            raise FixedLodoReportError(
+                f"{domain.value}: seeds disagree on the held-out code {sorted(map(str, decisions))}"
+            )
         accuracies = [float(p["selector_validation"]["accuracy"]) for p in payloads]
+        domain_accuracies = [
+            p["selector_validation"].get("domain_level_accuracy") for p in payloads
+        ]
         counts = {
             code: float(np.mean([p["test"]["assignment_counts"][code] for p in payloads]))
             for code in vocabulary
         }
+        per_image = [p["test"].get("nearest_image_counts") for p in payloads]
+        nearest_image_counts = (
+            {
+                code: float(np.mean([entry[code] for entry in per_image]))
+                for code in vocabulary
+            }
+            if all(entry is not None for entry in per_image)
+            else None
+        )
         nearest_minus_best = {
             s: float(np.mean([p["nearest_domain_minus_best_fixed_code_dice"][s] for p in payloads]))
             for s in CHANNEL_NAMES
@@ -222,8 +251,16 @@ def build_conditioning_cells(film_runs: Sequence[FixedRun]) -> tuple[Conditionin
                 held_out_domain=domain,
                 seeds=tuple(r.run_seed for r in runs),
                 vocabulary=vocabulary,
+                test_conditioning=next(iter(policies)),
+                chosen_code=next(iter(decisions)),
                 selector_val_accuracy=float(np.mean(accuracies)),
+                selector_domain_accuracy=(
+                    float(np.mean([float(a) for a in domain_accuracies]))
+                    if all(a is not None for a in domain_accuracies)
+                    else None
+                ),
                 assignment_counts=counts,
+                nearest_image_counts=nearest_image_counts,
                 nearest_minus_best=nearest_minus_best,
                 sweep_spread=spread,
                 best_fixed_code=votes,
@@ -287,19 +324,27 @@ def render_side_by_side(
 
 def render_conditioning_table(cells: Sequence[ConditioningCell]) -> str:
     lines = [
-        "| Held-out domain | Seeds | Selector val. accuracy | Held-out images per code (mean over seeds) | "
-        "Fixed-code sweep spread, disc / cup | Nearest − best fixed code, disc / cup | Best fixed code votes, disc / cup |",
-        "|---|---|---:|---|---:|---:|---|",
+        "| Held-out domain | Seeds | Code used | Selector accuracy on source val (per domain / per image) | "
+        "Per-image nearest source among held-out images | Fixed-code sweep spread, disc / cup | "
+        "Used − best fixed code, disc / cup | Best fixed code votes, disc / cup |",
+        "|---|---|---|---:|---|---:|---:|---|",
     ]
     for c in cells:
-        counts = ", ".join(f"`{code}`: {c.assignment_counts[code]:.1f}" for code in c.vocabulary)
+        code = f"`{c.chosen_code}`" if c.chosen_code else f"({c.test_conditioning})"
+        domain_acc = "—" if c.selector_domain_accuracy is None else f"{c.selector_domain_accuracy:.2f}"
+        per_image = (
+            ", ".join(f"`{k}`: {c.nearest_image_counts[k]:.1f}" for k in c.vocabulary)
+            if c.nearest_image_counts
+            else "—"
+        )
         votes = " / ".join(
-            ", ".join(f"`{code}`×{n}" for code, n in c.best_fixed_code[s].items() if n)
+            ", ".join(f"`{k}`×{n}" for k, n in c.best_fixed_code[s].items() if n)
             for s in CHANNEL_NAMES
         )
         lines.append(
-            f"| `{c.held_out_domain.value}` | {len(c.seeds)} | {c.selector_val_accuracy:.3f} | "
-            f"{counts} | {c.sweep_spread['disc']:.4f} / {c.sweep_spread['cup']:.4f} | "
+            f"| `{c.held_out_domain.value}` | {len(c.seeds)} | {code} | "
+            f"{domain_acc} / {c.selector_val_accuracy:.3f} | {per_image} | "
+            f"{c.sweep_spread['disc']:.4f} / {c.sweep_spread['cup']:.4f} | "
             f"{c.nearest_minus_best['disc']:+.4f} / {c.nearest_minus_best['cup']:+.4f} | {votes} |"
         )
     return "\n".join(lines)
@@ -346,11 +391,17 @@ def render_markdown_report(
     add("## 2. Did the conditioning do anything, and did the selector find it?")
     add("")
     add(
-        "Selector accuracy is measured on source-domain validation images whose true "
-        "domain is known. The fixed-code sweep scores the held-out set once under each "
-        "source code: a spread near zero means the codes are interchangeable and the "
-        "selector is irrelevant; a large spread with a negative 'nearest − best' means "
-        "the selector picked a worse code than was available."
+        "The held-out domain's code is decided once, from the mean colour statistics "
+        "of its unlabelled reference sample (its budgeted training partition, labels "
+        "unused, disjoint from the test images), as the source domain with the nearest "
+        "training centroid. Selector accuracy is measured on source-domain validation "
+        "images whose true domain is known, for the per-domain rule (one decision per "
+        "domain) and the per-image rule. The per-image column shows how the held-out "
+        "test images would individually be assigned; unanimity means the domain-level "
+        "decision is uncontroversial. The fixed-code sweep scores the held-out set once "
+        "under each source code: a spread near zero means the codes are interchangeable "
+        "and the decision is irrelevant; a large spread with a negative 'used − best' "
+        "means the rule picked a worse code than was available."
     )
     add("")
     add(render_conditioning_table(conditioning))
@@ -390,7 +441,12 @@ def write_csv(
             "kind": "conditioning",
             "held_out_domain": c.held_out_domain.value,
             "seeds": " ".join(str(s) for s in c.seeds),
+            "test_conditioning": c.test_conditioning,
+            "chosen_code": c.chosen_code or "",
             "selector_val_accuracy": f"{c.selector_val_accuracy:.6g}",
+            "selector_domain_accuracy": (
+                "" if c.selector_domain_accuracy is None else f"{c.selector_domain_accuracy:.6g}"
+            ),
         }
         for code in c.vocabulary:
             row[f"assigned_{code}"] = f"{c.assignment_counts[code]:.6g}"

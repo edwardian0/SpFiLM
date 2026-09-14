@@ -33,9 +33,11 @@ from .data import (
 from .film.conditioning import (
     DESCRIPTOR_NAMES,
     DESCRIPTOR_POLICY,
-    SELECTION_POLICY,
+    SELECTION_POLICIES,
     ConditionResult,
     ConditioningError,
+    DomainCondition,
+    DomainDecision,
     DomainVocabulary,
     FixedCondition,
     NearestCondition,
@@ -120,10 +122,12 @@ class Stage2Config:
     film_embedding_dim: int = 64
     film_hidden_dim: int = 256
     film_clamp: float = 5.0
-    # How held-out test images get a domain code. "nearest_domain": the source
-    # domain whose training descriptor centroid is nearest (the supervisor's
-    # policy for unseen domains). "oracle": the true code, valid only when every
-    # test image's domain is in the training vocabulary (in-domain checks).
+    # How held-out test images get a domain code. "nearest_domain": one code
+    # for the whole held-out domain, the source domain whose training centroid
+    # is nearest to the held-out domain's unlabelled reference sample (the
+    # supervisor's policy, decided per domain). "nearest_image": the same rule
+    # applied per image (ablation). "oracle": the true code, valid only when
+    # every test image's domain is in the training vocabulary (in-domain checks).
     test_conditioning: str = "nearest_domain"
 
     @classmethod
@@ -141,7 +145,7 @@ FILM_CONFIG_FIELDS = (
     "film_clamp",
     "test_conditioning",
 )
-TEST_CONDITIONING_POLICIES = ("nearest_domain", "oracle")
+TEST_CONDITIONING_POLICIES = tuple(SELECTION_POLICIES)
 
 
 def _resolve(project_root: Path, value: str) -> Path:
@@ -562,6 +566,11 @@ def _conditioning_rows(
             "selected_domain": vocabulary.domains[int(index)],
             "condition_source": condition.source,
         }
+        row["nearest_image_domain"] = (
+            vocabulary.domains[int(distances[position].argmin())]
+            if distances is not None
+            else ""
+        )
         for domain_position, domain in enumerate(vocabulary.domains):
             row[f"distance_{domain}"] = (
                 float(distances[position, domain_position])
@@ -600,6 +609,7 @@ def summarise_conditioning(
     """Assignment counts and, when the selector ran, the mean nearest distance."""
 
     counts = {domain: 0 for domain in vocabulary.domains}
+    per_image_counts = {domain: 0 for domain in vocabulary.domains}
     nearest: list[float] = []
     for row in rows:
         counts[str(row["selected_domain"])] += 1
@@ -610,6 +620,8 @@ def summarise_conditioning(
         ]
         if candidates:
             nearest.append(min(float(value) for value in candidates))
+        if row.get("nearest_image_domain"):
+            per_image_counts[str(row["nearest_image_domain"])] += 1
     true_domains = sorted({str(row["true_domain"]) for row in rows})
     return {
         "sample_count": len(rows),
@@ -617,7 +629,11 @@ def summarise_conditioning(
         "true_domains_in_vocabulary": all(
             domain in vocabulary.domains for domain in true_domains
         ),
+        # The code actually used per image (one value under the per-domain rule).
         "assignment_counts": counts,
+        # What the per-image rule would have chosen; a diagnostic of how
+        # unanimous the held-out images are about their nearest source.
+        "nearest_image_counts": per_image_counts if nearest else None,
         "mean_nearest_distance": (
             float(np.mean(nearest)) if nearest else None
         ),
@@ -824,6 +840,132 @@ def _gallery_predictor(
     return predict
 
 
+def _decide_held_out_code(
+    selector: NearestDomainSelector,
+    test_records: Sequence[FundusRecord],
+    reference: Sequence[FundusRecord] | None,
+    config: Stage2Config,
+    device: torch.device,
+) -> DomainDecision:
+    """Choose one source code for the held-out domain from its reference sample.
+
+    The decision compares the reference sample's mean descriptor with the source
+    centroids. The sample is the held-out domain's own budgeted training
+    partition: unlabelled use only, never trained on, and disjoint from the test
+    images, so the test set plays no part in choosing the code.
+    """
+
+    test_domains = sorted({record.domain for record in test_records})
+    if len(test_domains) != 1:
+        raise ConditioningError(
+            "test_conditioning='nearest_domain' decides one code per held-out "
+            f"domain and needs a single-domain test set, got {test_domains}"
+        )
+    if not reference:
+        raise ConditioningError(
+            "test_conditioning='nearest_domain' needs conditioning_reference: "
+            "the held-out domain's unlabelled reference images"
+        )
+    reference_domains = sorted({record.domain for record in reference})
+    if reference_domains != test_domains:
+        raise ConditioningError(
+            f"Reference images are from {reference_domains} but the test set is "
+            f"{test_domains}"
+        )
+    overlap = {record.sample_id for record in reference} & {
+        record.sample_id for record in test_records
+    }
+    if overlap:
+        raise ConditioningError(
+            f"Reference images overlap the test set: {sorted(overlap)[:5]}"
+        )
+    loader = _make_loader(
+        _make_dataset(list(reference), config, augment=False),
+        config,
+        device,
+        False,
+        torch.Generator().manual_seed(config.seed),
+    )
+    return selector.select_domain_from_loader(loader)
+
+
+def _named_set_fixed_code_sweep(
+    *,
+    model: torch.nn.Module,
+    records: Sequence[FundusRecord],
+    config: Stage2Config,
+    device: torch.device,
+    criterion: torch.nn.Module,
+    output_dir: Path,
+    name: str,
+    vocabulary: DomainVocabulary,
+    scored: Mapping[str, Any],
+    smoke: bool,
+) -> dict[str, Any]:
+    """Score one named test set once under every source code.
+
+    For a test domain the model was trained on (the train-on-all regime) this
+    measures the wrong-code penalty directly: how much Dice drops when a test
+    image is given another domain's code instead of its own. A flat sweep means
+    the codes are interchangeable and the conditioning is inert; a sweep where
+    the true code wins is the evidence that the network uses the code.
+    """
+
+    dataset = _make_dataset(list(records), config, augment=False)
+    loader = _make_loader(
+        dataset, config, device, False, torch.Generator().manual_seed(config.seed)
+    )
+    native_hd95 = all(record.domain == "rim_one_dl" for record in records)
+    sweep: dict[str, Any] = {}
+    artifacts: dict[str, str] = {}
+    for domain in vocabulary.domains:
+        csv_path = output_dir / f"test_{name}_fixed_code_{domain}_per_image_metrics.csv"
+        metrics = evaluate(
+            model,
+            loader,
+            criterion,
+            device,
+            threshold=config.threshold,
+            max_batches=1 if smoke else None,
+            per_image_csv=csv_path,
+            native_hd95=native_hd95,
+            condition_fn=FixedCondition(vocabulary, domain),
+        )
+        if native_hd95:
+            _append_rim_one_dl_per_image_context(csv_path, list(records), config.image_size)
+        sweep[domain] = {
+            structure: {
+                key: metrics[structure][key]
+                for key in ("dice_mean", "iou_mean", "hd95_mean", "sample_count")
+            }
+            for structure in CHANNEL_NAMES
+        }
+        artifacts[f"fixed_code_{domain}_per_image_metrics"] = str(csv_path)
+    best_fixed_code: dict[str, str] = {}
+    used_matches_best: dict[str, bool] = {}
+    used_minus_best: dict[str, float] = {}
+    used_minus_worst: dict[str, float] = {}
+    for structure in CHANNEL_NAMES:
+        by_code = {
+            domain: float(sweep[domain][structure]["dice_mean"])
+            for domain in vocabulary.domains
+        }
+        best = max(by_code, key=by_code.get)
+        used = float(scored[structure]["dice_mean"])
+        best_fixed_code[structure] = best
+        used_matches_best[structure] = math.isclose(used, by_code[best], abs_tol=1e-9)
+        used_minus_best[structure] = used - by_code[best]
+        used_minus_worst[structure] = used - min(by_code.values())
+    return {
+        "fixed_code_sweep": sweep,
+        "best_fixed_code": best_fixed_code,
+        "used_code_matches_best_fixed_code": used_matches_best,
+        "used_minus_best_fixed_code_dice": used_minus_best,
+        "used_minus_worst_fixed_code_dice": used_minus_worst,
+        "sweep_artifacts": artifacts,
+    }
+
+
 def _conditioning_report(
     *,
     model: torch.nn.Module,
@@ -877,6 +1019,37 @@ def _conditioning_report(
     artifacts["val_selector_per_image"] = str(validation_csv)
     selector_validation = selector_confusion(validation_rows, vocabulary)
     selector_validation["per_image_csv"] = str(validation_csv)
+    # The per-domain rule itself, checked on domains whose identity is known:
+    # average each source domain's validation descriptors and ask which
+    # centroid is nearest. It should be its own.
+    domain_level: dict[str, Any] = {}
+    for domain in vocabulary.domains:
+        members = torch.tensor(
+            [
+                [float(row[name]) for name in DESCRIPTOR_NAMES]
+                for row in validation_rows
+                if str(row["true_domain"]) == domain
+            ],
+            dtype=torch.float32,
+        )
+        if members.shape[0] == 0:
+            continue
+        index, distances, _centroid = selector.select_domain(members)
+        domain_level[domain] = {
+            "chosen": vocabulary.domains[index],
+            "correct": vocabulary.domains[index] == domain,
+            "image_count": int(members.shape[0]),
+            "distances": {
+                other: float(distances[position])
+                for position, other in enumerate(vocabulary.domains)
+            },
+        }
+    selector_validation["domain_level"] = domain_level
+    selector_validation["domain_level_accuracy"] = (
+        sum(1 for entry in domain_level.values() if entry["correct"]) / len(domain_level)
+        if domain_level
+        else None
+    )
 
     sweep: dict[str, Any] = {}
     for domain in vocabulary.domains:
@@ -911,7 +1084,12 @@ def _conditioning_report(
         "test_condition_source": test_condition.source,
         "descriptor": list(DESCRIPTOR_NAMES),
         "descriptor_policy": DESCRIPTOR_POLICY,
-        "selection_policy": SELECTION_POLICY,
+        "selection_policy": SELECTION_POLICIES[config.test_conditioning],
+        "domain_decision": (
+            test_condition.decision.to_json()
+            if isinstance(test_condition, DomainCondition)
+            else None
+        ),
         "film": {
             "levels": config.film_levels,
             "embedding_dim": config.film_embedding_dim,
@@ -957,6 +1135,7 @@ def run_experiment(
     split_policy: str | None = None,
     allow_resume: bool = False,
     extra_test_sets: Mapping[str, Sequence[FundusRecord]] | None = None,
+    conditioning_reference: Sequence[FundusRecord] | None = None,
 ) -> dict[str, Any]:
     """Audit, split, train, and evaluate the Stage 2 single-domain baseline.
 
@@ -966,6 +1145,10 @@ def run_experiment(
     best; when given it replaces the default per-epoch print. ``extra_test_sets``
     names further already-unseen test sets to score with the same selected
     checkpoint, each reported separately under ``test_by_name``.
+    ``conditioning_reference`` is the held-out domain's unlabelled reference
+    sample that a conditioned arm under ``test_conditioning="nearest_domain"``
+    decides the domain's code from; its labels are never read and it must be
+    disjoint from the test images.
     """
 
     project_root = Path(project_root).expanduser().resolve()
@@ -1080,16 +1263,24 @@ def run_experiment(
         selector = NearestDomainSelector.fit_from_loader(selector_loader, vocabulary)
         selector.save(output_dir / "domain_selector.json")
         train_condition = OracleCondition(vocabulary)
-        test_condition = (
-            NearestCondition(selector)
-            if config.test_conditioning == "nearest_domain"
-            else OracleCondition(vocabulary)
-        )
+        domain_decision: DomainDecision | None = None
+        if config.test_conditioning == "nearest_domain":
+            domain_decision = _decide_held_out_code(
+                selector, splits["test"], conditioning_reference, config, device
+            )
+            test_condition = DomainCondition(selector, domain_decision)
+        elif config.test_conditioning == "nearest_image":
+            test_condition = NearestCondition(selector)
+        else:
+            test_condition = OracleCondition(vocabulary)
         checkpoint_conditioning = {
             "domain_vocabulary": vocabulary.to_json(),
             "domain_selector": selector.to_json(),
             "train_val_conditioning": OracleCondition.source,
             "test_conditioning": config.test_conditioning,
+            "domain_decision": (
+                domain_decision.to_json() if domain_decision is not None else None
+            ),
         }
         print(
             f"conditioning | arm={config.arm} | codes={list(vocabulary.domains)} | "
@@ -1097,6 +1288,17 @@ def run_experiment(
             f"film_levels={config.film_levels}",
             flush=True,
         )
+        if domain_decision is not None:
+            print(
+                f"held-out code | {domain_decision.held_out_domain} -> "
+                f"{domain_decision.chosen_domain} | distances="
+                + ", ".join(
+                    f"{domain}={value:.3f}"
+                    for domain, value in domain_decision.distances.items()
+                )
+                + f" | reference images={len(domain_decision.reference_sample_ids)}",
+                flush=True,
+            )
 
     model = build_model(
         config.arm,
@@ -1371,6 +1573,22 @@ def run_experiment(
             smoke=smoke,
             condition_fn=test_condition,
         )
+        if conditioned:
+            assert vocabulary is not None
+            test_by_name[name]["conditioning"].update(
+                _named_set_fixed_code_sweep(
+                    model=model,
+                    records=list((extra_test_sets or {})[name]),
+                    config=config,
+                    device=device,
+                    criterion=criterion,
+                    output_dir=output_dir,
+                    name=name,
+                    vocabulary=vocabulary,
+                    scored=test_by_name[name],
+                    smoke=smoke,
+                )
+            )
     save_training_curves(history, output_dir / "training_curves.png")
     save_prediction_gallery(
         model,

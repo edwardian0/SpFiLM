@@ -231,6 +231,31 @@ def fixed_lodo_folds(
     return compose_all_lodo_folds(partitions)
 
 
+CONDITIONING_REFERENCE_PARTITION = "held_out_budgeted_train"
+
+
+def held_out_reference_keys(
+    manifest: SingleSourceManifest, held_out_domain: Domain
+) -> tuple[SampleKey, ...]:
+    """The held-out domain's unlabelled reference sample for a conditioned arm.
+
+    Under ``test_conditioning="nearest_domain"`` the conditioned model needs one
+    code for the whole held-out domain, decided from images of that domain. The
+    budgeted training partition is used: it is excluded from every fold's
+    training and validation (the fold trains on the *other* domains), its labels
+    are never read, and it is disjoint from the budgeted test partition, so the
+    test images play no part in the decision. Any partition would give the same
+    kind of evidence; this one is the locked, already-committed choice.
+    """
+
+    for partition in manifest.budgeted_partitions:
+        if partition.domain == held_out_domain:
+            return tuple(partition.train)
+    raise Stage3DataError(
+        f"{held_out_domain.value} has no budgeted partition in the manifest"
+    )
+
+
 def _manifest_summary(
     manifest: SingleSourceManifest, config: Stage3SingleSourceConfig
 ) -> dict[str, object]:
@@ -406,6 +431,19 @@ def _run_one(
         for name in ("train", "val", "test")
         for record in executed_splits[name]
     ]
+    conditioning_reference: list[FundusRecord] = []
+    if config.arm != "plain" and config.test_conditioning == "nearest_domain":
+        reference_keys = held_out_reference_keys(manifest, held_out_domain)
+        try:
+            conditioning_reference = [records_by_key[key] for key in reference_keys]
+        except KeyError as error:
+            raise Stage3DataError(
+                f"Reference image {error.args[0]!r} for {held_out_domain.value} "
+                "is not among the discovered records"
+            ) from None
+        if smoke:
+            # A rehearsal needs the decision path, not the full sample.
+            conditioning_reference = conditioning_reference[:3]
     base_output = _run_output_dir(config, held_out_domain, seed, explicit_output)
     actual_output = _require_fresh_output(base_output, smoke)
     relative_output = base_output.relative_to(PROJECT_ROOT)
@@ -451,6 +489,7 @@ def _run_one(
         split_records=executed_splits,
         split_policy=FIXED_LODO_SPLIT_POLICY,
         allow_resume=True,
+        conditioning_reference=conditioning_reference or None,
     )
     parent_path = parent_lodo_manifest_path(config, PROJECT_ROOT)
     fixed_lodo_metadata = {
@@ -466,6 +505,17 @@ def _run_one(
         # discovered and validated but never trained on or tested.
         "active_domains": active_domains,
         "fold_shape": f"train on {len(source_domains)}, test on 1",
+        "conditioning_reference": (
+            {
+                "partition": CONDITIONING_REFERENCE_PARTITION,
+                "domain": held_out_domain.value,
+                "image_count": len(conditioning_reference),
+                "labels_used": False,
+                "disjoint_from_test": True,
+            }
+            if conditioning_reference
+            else None
+        ),
         "run_seed": seed,
         "budget": {
             "train": config.train_budget,

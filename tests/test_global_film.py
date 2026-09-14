@@ -35,7 +35,14 @@ from aggregate_stage3_fixed import (  # noqa: E402
     paired_tests,
     select_fixed_runs,
 )
-from run_stage3_lodo_3_1_fixed import CONFIG_DOMAINS_KEY, CONFIG_STAGE  # noqa: E402
+from run_stage3_lodo_3_1_fixed import (  # noqa: E402
+    CONFIG_DOMAINS_KEY,
+    CONFIG_STAGE,
+    fixed_lodo_folds,
+    held_out_reference_keys,
+)
+from spfilm.lodo import DomainPartitions, SampleKey  # noqa: E402
+from spfilm.single_source import SingleSourceManifest  # noqa: E402
 from spfilm.engine import (  # noqa: E402
     FILM_CONFIG_FIELDS,
     Stage2Config,
@@ -47,6 +54,8 @@ from spfilm.engine import (  # noqa: E402
 from spfilm.film.conditioning import (  # noqa: E402
     DESCRIPTOR_NAMES,
     ConditioningError,
+    DomainCondition,
+    DomainDecision,
     DomainVocabulary,
     FixedCondition,
     NearestCondition,
@@ -61,7 +70,6 @@ from spfilm.model import ConditionedUNet, PlainUNet, build_model  # noqa: E402
 from spfilm.stage3 import Stage3ConfigError  # noqa: E402
 from spfilm.stage3_single_source import Stage3SingleSourceConfig  # noqa: E402
 
-import run_stage3_lodo_1_3  # noqa: E402
 
 STAGE3_CONFIG = PROJECT_ROOT / "configs" / "stage3_lodo_fixed.json"
 PLAIN_CONFIG = PROJECT_ROOT / "configs" / "stage4_plain_3dom.json"
@@ -278,6 +286,40 @@ class SelectorTests(unittest.TestCase):
                 fov_descriptor(_images(0.2)), ["dark"] * 4, self.vocabulary
             )
 
+    def test_domain_decision_averages_before_comparing(self) -> None:
+        """Option B: one decision for the whole domain from its mean descriptor."""
+
+        mixed = torch.cat([fov_descriptor(_images(0.6, count=5)), fov_descriptor(_images(0.25, count=1))])
+        index, distances, centroid = self.selector.select_domain(mixed)
+        self.assertEqual(self.vocabulary.domains[index], "bright")
+        self.assertEqual(tuple(distances.shape), (2,))
+        self.assertTrue(torch.allclose(centroid, mixed.mean(dim=0)))
+        with self.assertRaises(ValueError):
+            self.selector.select_domain(torch.zeros(0, len(DESCRIPTOR_NAMES)))
+
+    def test_domain_decision_from_loader_records_its_evidence(self) -> None:
+        class _Loader:
+            def __iter__(self):
+                yield _images(0.65, count=3), None, {"domain": ["unseen"] * 3, "sample_id": ["a", "b", "c"]}
+                yield _images(0.7, count=2), None, {"domain": ["unseen"] * 2, "sample_id": ["d", "e"]}
+
+        decision = self.selector.select_domain_from_loader(_Loader())
+        self.assertEqual(decision.held_out_domain, "unseen")
+        self.assertEqual(decision.chosen_domain, "bright")
+        self.assertEqual(decision.chosen_index, self.vocabulary.index_of("bright"))
+        self.assertEqual(decision.reference_sample_ids, ("a", "b", "c", "d", "e"))
+        self.assertLess(decision.distances["bright"], decision.distances["dark"])
+        payload = json.loads(json.dumps(decision.to_json()))
+        self.assertEqual(payload["reference_image_count"], 5)
+
+    def test_domain_decision_refuses_a_mixed_reference_sample(self) -> None:
+        class _Loader:
+            def __iter__(self):
+                yield _images(0.65, count=2), None, {"domain": ["x", "y"], "sample_id": ["a", "b"]}
+
+        with self.assertRaises(ConditioningError):
+            self.selector.select_domain_from_loader(_Loader())
+
     def test_fit_from_loader_uses_the_batch_metadata_domains(self) -> None:
         class _Loader:
             def __iter__(self):
@@ -310,13 +352,32 @@ class ConditionProviderTests(unittest.TestCase):
         with self.assertRaises(ConditioningError):
             FixedCondition(self.vocabulary, "held_out")
 
-    def test_nearest_ignores_the_metadata_domain(self) -> None:
+    def test_nearest_image_ignores_the_metadata_domain(self) -> None:
         descriptors = torch.cat([fov_descriptor(_images(0.2)), fov_descriptor(_images(0.7))])
         selector = NearestDomainSelector.fit(descriptors, ["a"] * 4 + ["b"] * 4, self.vocabulary)
         result = NearestCondition(selector)(_images(0.7, count=2), {"domain": ["unseen", "unseen"]})
         self.assertEqual(result.indices.tolist(), [1, 1])
-        self.assertEqual(result.source, "nearest_domain")
+        self.assertEqual(result.source, "nearest_image")
         self.assertIsNotNone(result.distances)
+
+    def test_domain_condition_uses_one_code_but_logs_the_per_image_view(self) -> None:
+        descriptors = torch.cat([fov_descriptor(_images(0.2)), fov_descriptor(_images(0.7))])
+        selector = NearestDomainSelector.fit(descriptors, ["a"] * 4 + ["b"] * 4, self.vocabulary)
+        decision = DomainDecision(
+            held_out_domain="unseen", chosen_domain="a", chosen_index=0,
+            distances={"a": 0.1, "b": 2.0}, reference_centroid={}, reference_sample_ids=("r",),
+        )
+        condition = DomainCondition(selector, decision)
+        # bright images would individually map to "b", but the domain code is "a"
+        result = condition(_images(0.7, count=2), {"domain": ["unseen", "unseen"]})
+        self.assertEqual(result.indices.tolist(), [0, 0])
+        self.assertEqual(result.source, "nearest_domain")
+        self.assertEqual(result.distances.argmin(dim=1).tolist(), [1, 1])
+        with self.assertRaises(ConditioningError):
+            DomainCondition(selector, DomainDecision(
+                held_out_domain="unseen", chosen_domain="b", chosen_index=0,
+                distances={}, reference_centroid={}, reference_sample_ids=(),
+            ))
 
 
 # --------------------------------------------------------------------------
@@ -416,11 +477,33 @@ class EvaluateConditioningTests(unittest.TestCase):
         rows = metrics["conditioning"]["rows"]
         self.assertEqual([r["image_id"] for r in rows], ["img0", "img1", "img2"])
         self.assertEqual([r["selected_domain"] for r in rows], ["dark", "bright", "bright"])
-        self.assertEqual({r["condition_source"] for r in rows}, {"nearest_domain"})
+        self.assertEqual([r["nearest_image_domain"] for r in rows], ["dark", "bright", "bright"])
+        self.assertEqual({r["condition_source"] for r in rows}, {"nearest_image"})
         self.assertEqual(sum(self.model.seen, []), [1, 0, 0])
         for row in rows:
             self.assertIsInstance(row["distance_dark"], float)
             self.assertIsInstance(row["red_mean"], float)
+
+    def test_per_domain_code_is_used_for_every_image_and_per_image_view_is_kept(self) -> None:
+        decision = DomainDecision(
+            held_out_domain="held_out", chosen_domain="dark", chosen_index=1,
+            distances={"bright": 2.0, "dark": 0.5}, reference_centroid={}, reference_sample_ids=("r",),
+        )
+        metrics = evaluate(
+            self.model,
+            self.loader,
+            BCEDiceLoss(),
+            torch.device("cpu"),
+            threshold=0.5,
+            condition_fn=DomainCondition(self.selector, decision),
+        )
+        rows = metrics["conditioning"]["rows"]
+        self.assertEqual({r["selected_domain"] for r in rows}, {"dark"})
+        self.assertEqual([r["nearest_image_domain"] for r in rows], ["dark", "bright", "bright"])
+        self.assertEqual(sum(self.model.seen, []), [1, 1, 1])
+        summary = summarise_conditioning(rows, self.vocabulary)
+        self.assertEqual(summary["assignment_counts"], {"bright": 0, "dark": 3})
+        self.assertEqual(summary["nearest_image_counts"], {"bright": 2, "dark": 1})
 
     def test_summary_counts_assignments_and_flags_unseen_true_domains(self) -> None:
         rows = [
@@ -556,6 +639,12 @@ class Stage4ConfigTests(unittest.TestCase):
         with self.assertRaises(Stage3ConfigError):
             _load(_write_temp_config(payload))
 
+    def test_test_conditioning_policies_are_the_three_named_ones(self) -> None:
+        for policy in ("nearest_domain", "nearest_image", "oracle"):
+            payload = json.loads(FILM_CONFIG.read_text())
+            payload["film"]["test_conditioning"] = policy
+            self.assertEqual(_load(_write_temp_config(payload)).test_conditioning, policy)
+
     def test_film_block_is_validated(self) -> None:
         for bad in ({"levels": 6}, {"clamp": 0}, {"test_conditioning": "guess"}, {"rank": 8}):
             payload = json.loads(FILM_CONFIG.read_text())
@@ -563,15 +652,32 @@ class Stage4ConfigTests(unittest.TestCase):
             with self.assertRaises(Stage3ConfigError, msg=str(bad)):
                 _load(_write_temp_config(payload))
 
-    def test_train_on_one_runner_refuses_a_conditioned_arm(self) -> None:
-        payload = json.loads(FILM_CONFIG.read_text())
-        payload["stage"] = "single_source"
-        payload["protocol"]["source_domains"] = payload["protocol"].pop(CONFIG_DOMAINS_KEY)
-        path = _write_temp_config(payload)
-        self.assertEqual(
-            run_stage3_lodo_1_3.main(["--config", str(path), "check", "--skip-mask-audit"]),
-            2,
-        )
+
+class ReferenceSampleTests(unittest.TestCase):
+    """The held-out domain's reference sample is its budgeted train partition."""
+
+    def setUp(self) -> None:
+        partitions = []
+        strata = {}
+        for domain in sorted(Domain, key=lambda item: item.value):
+            prefix = domain.value[:3]
+            train = tuple(SampleKey(domain, f"{prefix}_tr{n}") for n in range(4))
+            val = tuple(SampleKey(domain, f"{prefix}_va{n}") for n in range(2))
+            test = tuple(SampleKey(domain, f"{prefix}_te{n}") for n in range(3))
+            partitions.append(DomainPartitions(domain=domain, train=train, val=val, test=test))
+            for key in train + val + test:
+                strata[key] = "all"
+        self.manifest = SingleSourceManifest.build("a" * 64, tuple(partitions), 4, 2, 3, strata, 42)
+
+    def test_reference_is_the_held_out_train_partition_and_disjoint_from_the_fold(self) -> None:
+        active = (Domain.DRISHTI_GS, Domain.REFUGE_CANON_VAL, Domain.REFUGE_ZEISS)
+        for fold in fixed_lodo_folds(self.manifest, active):
+            reference = held_out_reference_keys(self.manifest, fold.held_out_domain)
+            self.assertEqual(len(reference), 4)
+            self.assertTrue(all(key.domain == fold.held_out_domain for key in reference))
+            self.assertTrue(set(reference).isdisjoint(fold.test))
+            self.assertTrue(set(reference).isdisjoint(fold.train))
+            self.assertTrue(set(reference).isdisjoint(fold.val))
 
 
 # --------------------------------------------------------------------------

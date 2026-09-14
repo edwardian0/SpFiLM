@@ -284,14 +284,33 @@ def discover_runs(roots: Iterable[str | Path]) -> tuple[SingleSourceRun, ...]:
 def select_scientific_runs(
     runs: Sequence[SingleSourceRun],
     expected_seeds: Sequence[int] = DEFAULT_EXPECTED_SEEDS,
+    arm: str | None = None,
 ) -> tuple[SingleSourceRun, ...]:
     """Keep one run per source/seed and prove the grid is complete.
 
     A preempted job that was relaunched leaves two directories for the same
     source and seed. The later completion is the real one; taking both would
     weight that cell twice.
+
+    ``arm`` restricts the selection to one experiment when a run root holds
+    several (the Stage 3 plain arm and the Step 4 Global FiLM control share
+    ``artifacts/runs``); without it the runs must already be a single arm.
     """
 
+    if arm is not None:
+        runs = [run for run in runs if run.identity.arm == arm]
+        if not runs:
+            raise Stage3SingleSourceReportError(
+                f"No scientific runs found for arm {arm!r}"
+            )
+    # Check the arms before collapsing to one run per cell: two arms share every
+    # (source, seed) cell, so a later dedup would silently keep whichever
+    # finished last and report a mixture as one arm.
+    arms = {run.identity.arm for run in runs}
+    if len(arms) > 1:
+        raise Stage3SingleSourceReportError(
+            f"Runs mix experimental arms: {sorted(arms)}; pass --arm to pick one"
+        )
     by_cell: dict[tuple[str, int], SingleSourceRun] = {}
     for run in runs:
         key = (run.identity.source_domain.value, run.identity.run_seed)
@@ -308,11 +327,6 @@ def select_scientific_runs(
     if not selected:
         raise Stage3SingleSourceReportError("No scientific runs of this arm were found")
 
-    arms = {run.identity.arm for run in selected}
-    if len(arms) != 1:
-        raise Stage3SingleSourceReportError(
-            f"Runs mix experimental arms: {sorted(arms)}"
-        )
     for field in ("manifest_sha256", "parent_manifest_sha256"):
         digests = {getattr(run.identity, field) for run in selected}
         if len(digests) != 1:
@@ -908,6 +922,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=list(DEFAULT_EXPECTED_SEEDS),
         help="Seeds every source domain must have completed",
     )
+    parser.add_argument(
+        "--arm",
+        help=(
+            "Experiment name to report when the run root holds several arms "
+            "(e.g. stage3_single_source_plain_unet)"
+        ),
+    )
     parser.add_argument("--report-out", type=Path, help="Write the markdown report here")
     parser.add_argument("--csv-out", type=Path, help="Write the per-cell table here")
     return parser.parse_args(argv)
@@ -920,7 +941,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest_path = args.manifest.expanduser().resolve()
         manifest = load_single_source_manifest(manifest_path)
         runs = select_scientific_runs(
-            discover_runs(roots), tuple(args.expected_seeds)
+            discover_runs(roots), tuple(args.expected_seeds), arm=args.arm
         )
 
         manifest_digest = _sha256(manifest_path)

@@ -4,12 +4,16 @@ Training and validation images come from the source domains, so their code is
 the true one (``OracleCondition``). Under leave-one-domain-out the test images
 come from a domain the model has never seen, so there is no valid code for
 them. The policy agreed with the supervisor (2026-09-12) is: *supply the code of
-the source domain whose distribution the image is closest to*. That is the
-``NearestDomainSelector``: a label-free appearance descriptor of the input is
-compared with per-source-domain reference statistics fitted on the fold's
-training images, and the nearest domain's code is used. The selector is part of
-the forward pass -- one decision per image, nothing pooled over the test set --
-so a held-out result stays purely inductive.
+the source domain whose distribution the held-out domain is closest to*, decided
+**once per held-out domain** (his choice over a per-image rule, so the method is
+simple to state in a paper). That is ``DomainCondition`` built from the
+``NearestDomainSelector``: the mean label-free appearance descriptor of an
+unlabelled reference sample of the held-out domain (its budgeted training
+partition, labels never read; the test images are not consulted) is compared
+with the per-source-domain centroids fitted on the fold's training images, and
+the nearest domain's code is used for every test image. The per-image rule
+(``NearestCondition``) is kept as an ablation, and the per-image nearest domain
+is still logged for every test image as a diagnostic.
 
 The descriptor is the per-channel mean and standard deviation of the RGB values
 inside the retinal field of view, computed on the exact tensor the network
@@ -48,11 +52,21 @@ DESCRIPTOR_POLICY = (
     f"(Rec. 601 luminance > {FOV_LUMINANCE_THRESHOLD}) of the letterboxed [0, 1] "
     "input tensor"
 )
-SELECTION_POLICY = (
-    "per image: standardise each descriptor dimension by the pooled "
-    "within-domain training spread (diagonal LDA), take the Euclidean distance "
-    "to each source domain's training centroid, and use the nearest domain's code"
-)
+SELECTION_POLICIES = {
+    "nearest_domain": (
+        "per held-out domain: average the descriptor over an unlabelled "
+        "reference sample of the held-out domain, standardise each dimension by "
+        "the pooled within-domain training spread (diagonal LDA), take the "
+        "Euclidean distance to each source domain's training centroid, and use "
+        "the nearest domain's code for every test image"
+    ),
+    "nearest_image": (
+        "per image: standardise the image's descriptor the same way, take the "
+        "distance to each source centroid, and use the nearest domain's code"
+    ),
+    "oracle": "the true domain code; only valid for domains in the vocabulary",
+}
+SELECTION_POLICY = SELECTION_POLICIES["nearest_domain"]
 SCHEMA_VERSION = 1
 
 
@@ -277,6 +291,54 @@ class NearestDomainSelector:
         distances = self.distances(descriptors)
         return distances.argmin(dim=1), distances, descriptors
 
+    def select_domain(
+        self, descriptors: torch.Tensor
+    ) -> tuple[int, torch.Tensor, torch.Tensor]:
+        """One decision for a whole domain from its images' descriptors ``(M, 6)``.
+
+        Returns ``(index, distances (K,), centroid (6,))``: the descriptors are
+        averaged first, so the decision compares the domain's centroid with the
+        source centroids rather than voting over images.
+        """
+
+        if descriptors.dim() != 2 or descriptors.shape[0] == 0:
+            raise ValueError("select_domain needs a non-empty (M, 6) descriptor batch")
+        centroid = descriptors.float().mean(dim=0, keepdim=True)
+        distances = self.distances(centroid)[0]
+        return int(distances.argmin()), distances, centroid[0]
+
+    def select_domain_from_loader(
+        self, loader: Iterable[tuple[torch.Tensor, Any, Mapping[str, Any]]]
+    ) -> "DomainDecision":
+        """Decide a domain's code from a loader over its unlabelled reference images."""
+
+        descriptors: list[torch.Tensor] = []
+        sample_ids: list[str] = []
+        domains: set[str] = set()
+        for images, _targets, metadata in loader:
+            descriptors.append(fov_descriptor(images).cpu())
+            sample_ids.extend(str(value) for value in metadata["sample_id"])
+            domains.update(str(value) for value in metadata["domain"])
+        if not descriptors:
+            raise ValueError("Reference loader yielded no images")
+        if len(domains) != 1:
+            raise ConditioningError(
+                "A per-domain decision needs reference images from exactly one "
+                f"domain, got {sorted(domains)}"
+            )
+        index, distances, centroid = self.select_domain(torch.cat(descriptors))
+        return DomainDecision(
+            held_out_domain=next(iter(domains)),
+            chosen_domain=self.vocabulary.domains[index],
+            chosen_index=index,
+            distances={
+                domain: float(distances[position])
+                for position, domain in enumerate(self.vocabulary.domains)
+            },
+            reference_centroid=dict(zip(DESCRIPTOR_NAMES, centroid.tolist())),
+            reference_sample_ids=tuple(sample_ids),
+        )
+
     def to_json(self) -> dict[str, Any]:
         return {
             "schema_version": SCHEMA_VERSION,
@@ -322,6 +384,29 @@ class NearestDomainSelector:
 
 
 @dataclass(frozen=True)
+class DomainDecision:
+    """The one code chosen for a held-out domain, and the evidence behind it."""
+
+    held_out_domain: str
+    chosen_domain: str
+    chosen_index: int
+    distances: Mapping[str, float]
+    reference_centroid: Mapping[str, float]
+    reference_sample_ids: tuple[str, ...]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "held_out_domain": self.held_out_domain,
+            "chosen_domain": self.chosen_domain,
+            "chosen_index": self.chosen_index,
+            "distances": dict(self.distances),
+            "reference_centroid": dict(self.reference_centroid),
+            "reference_image_count": len(self.reference_sample_ids),
+            "reference_sample_ids": list(self.reference_sample_ids),
+        }
+
+
+@dataclass(frozen=True)
 class ConditionResult:
     """The codes used for one batch, plus what the selector saw when it chose them."""
 
@@ -354,9 +439,9 @@ class OracleCondition:
 
 
 class NearestCondition:
-    """The nearest source domain's code, chosen per image by the selector."""
+    """The nearest source domain's code, chosen per image by the selector (ablation)."""
 
-    source = "nearest_domain"
+    source = "nearest_image"
 
     def __init__(self, selector: NearestDomainSelector) -> None:
         self.selector = selector
@@ -369,6 +454,42 @@ class NearestCondition:
         indices, distances, descriptors = self.selector.select(images)
         return ConditionResult(
             indices=indices.to(images.device),
+            source=self.source,
+            distances=distances,
+            descriptors=descriptors,
+        )
+
+
+class DomainCondition:
+    """One source domain's code for every image of a held-out domain.
+
+    The code was decided once from the held-out domain's reference sample
+    (``DomainDecision``). The selector still runs per image so the per-image
+    nearest domain, distances and descriptor are logged as a diagnostic, but
+    they never change the code that is used.
+    """
+
+    source = "nearest_domain"
+
+    def __init__(self, selector: NearestDomainSelector, decision: DomainDecision) -> None:
+        if selector.vocabulary.domains[decision.chosen_index] != decision.chosen_domain:
+            raise ConditioningError("DomainDecision does not match the selector vocabulary")
+        self.selector = selector
+        self.vocabulary = selector.vocabulary
+        self.decision = decision
+
+    def __call__(
+        self, images: torch.Tensor, metadata: Mapping[str, Any]
+    ) -> ConditionResult:
+        del metadata
+        _per_image, distances, descriptors = self.selector.select(images)
+        return ConditionResult(
+            indices=torch.full(
+                (images.shape[0],),
+                self.decision.chosen_index,
+                dtype=torch.long,
+                device=images.device,
+            ),
             source=self.source,
             distances=distances,
             descriptors=descriptors,

@@ -35,6 +35,7 @@ from spfilm.lodo import (  # noqa: E402
 )
 from spfilm.single_source import (  # noqa: E402
     SINGLE_SOURCE_PROTOCOL_NAME,
+    SingleSourceFold,
     SingleSourceManifest,
     SingleSourceManifestError,
     load_single_source_manifest,
@@ -60,16 +61,70 @@ from spfilm.stage3_single_source import (  # noqa: E402
 
 
 DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "stage3_lodo_single.json"
-SINGLE_SOURCE_SPLIT_POLICY = (
-    "locked single-source: source train/val only; three named target tests; "
-    "source test and target train/val excluded"
+# The plain train-on-one arm is paired with the plain fixed-budget LODO arm
+# (training volume is the variable). A conditioned arm names its own pair in
+# the config; without one it is paired with nothing.
+DEFAULT_PLAIN_PAIRED_ARM = "stage3_lodo_fixed_budget_plain_unet"
+# Prose in the run metadata spells the target count out. The Stage 3 runs said
+# "three"; a protocol that drops a domain says "two", and nothing else changes.
+NUMBER_WORDS = {1: "one", 2: "two", 3: "three"}
+DEGENERATE_CONDITIONING_WARNING = (
+    "WARNING: single source => one code; Global FiLM reduces to a fixed "
+    "per-channel affine and is a control, not a conditioning test"
 )
+
+
+def _number_word(count: int) -> str:
+    return NUMBER_WORDS.get(count, str(count))
+
+
+def single_source_split_policy(target_count: int) -> str:
+    return (
+        "locked single-source: source train/val only; "
+        f"{_number_word(target_count)} named target tests; "
+        "source test and target train/val excluded"
+    )
+
+
+SINGLE_SOURCE_SPLIT_POLICY = single_source_split_policy(3)
+
+
+def active_target_domains(
+    fold: SingleSourceFold,
+    active_domains: Sequence[Domain] | None = None,
+) -> tuple[Domain, ...]:
+    """The fold's targets restricted to the protocol's active set.
+
+    The locked manifest composes every fold over all four budgeted partitions,
+    so ``fold.target_domains`` always lists the three other domains. A protocol
+    that leaves a domain out (Step 4 drops RIM-ONE-DL) still trains on exactly
+    the same source images; it simply does not score the inactive target. The
+    manifest is never rebuilt for this; the restriction happens here.
+    """
+
+    if active_domains is None:
+        return fold.target_domains
+    active = set(active_domains)
+    if fold.source_domain not in active:
+        raise Stage3ConfigError(
+            f"Source {fold.source_domain.value} is not an active domain "
+            f"{sorted(domain.value for domain in active)}"
+        )
+    targets = tuple(
+        domain for domain in fold.target_domains if domain in active
+    )
+    if not targets:
+        raise Stage3ConfigError(
+            f"Source {fold.source_domain.value} has no active target domain "
+            "to be scored on"
+        )
+    return targets
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Stage 3 plain-U-Net train-on-one, test-on-three protocol with "
+            "Stage 3 train-on-one, test-on-the-others protocol with "
             "fixed budgets and frozen, revalidated membership"
         )
     )
@@ -176,10 +231,19 @@ def _write_json(path: Path, payload: object) -> Path:
     return path
 
 
-def _manifest_summary(manifest: SingleSourceManifest) -> dict[str, object]:
+def _manifest_summary(
+    manifest: SingleSourceManifest, config: Stage3SingleSourceConfig
+) -> dict[str, object]:
+    active = set(config.active_domains)
     return {
         "schema_version": manifest.schema_version,
         "parent_manifest_sha256": manifest.parent_manifest_sha256,
+        "active_domains": [domain.value for domain in config.active_domains],
+        "inactive_domains": [
+            partition.domain.value
+            for partition in manifest.budgeted_partitions
+            if partition.domain not in active
+        ],
         "budget": {
             "train": manifest.train_budget,
             "val": manifest.val_budget,
@@ -197,12 +261,17 @@ def _manifest_summary(manifest: SingleSourceManifest) -> dict[str, object]:
             fold.source_domain.value: {
                 "train": len(fold.train),
                 "val": len(fold.val),
-                "test": len(fold.test),
+                "test": sum(
+                    len(fold.test_samples(domain))
+                    for domain in active_target_domains(fold, config.active_domains)
+                ),
                 "test_by_domain": {
-                    domain.value: len(samples) for domain, samples in fold.tests
+                    domain.value: len(fold.test_samples(domain))
+                    for domain in active_target_domains(fold, config.active_domains)
                 },
             }
             for fold in manifest.folds
+            if fold.source_domain in active
         },
     }
 
@@ -265,7 +334,7 @@ def prepare(config: Stage3SingleSourceConfig, force: bool) -> int:
                 "status": status,
                 "manifest": str(output_path),
                 "sha256": _sha256(output_path),
-                **_manifest_summary(manifest),
+                **_manifest_summary(manifest, config),
             },
             indent=2,
             sort_keys=True,
@@ -289,7 +358,7 @@ def check(config: Stage3SingleSourceConfig, skip_mask_audit: bool) -> int:
             domain.value: len(records)
             for domain, records in sorted(records_by_domain.items())
         },
-        **_manifest_summary(manifest),
+        **_manifest_summary(manifest, config),
     }
     if skip_mask_audit:
         report["mask_audit"] = "SKIPPED by explicit flag"
@@ -389,11 +458,20 @@ def _run_one(
     fold = next(
         fold for fold in manifest.folds if fold.source_domain == source_domain
     )
-    locked_views = single_source_fold_splits(fold, records_by_key)
+    target_domains = active_target_domains(fold, config.active_domains)
+    inactive_targets = tuple(
+        domain for domain in fold.target_domains if domain not in target_domains
+    )
+    # Every target is resolved (the manifest is the membership of record), then
+    # the inactive ones are dropped before anything is evaluated.
+    locked_views = {
+        name: records
+        for name, records in single_source_fold_splits(fold, records_by_key).items()
+        if name in {"train", "val", *(domain.value for domain in target_domains)}
+    }
     executed_views = (
         select_single_source_smoke_splits(locked_views) if smoke else locked_views
     )
-    target_domains = fold.target_domains
     pooled_test = sorted(
         (
             record
@@ -430,10 +508,16 @@ def _run_one(
         for domain in target_domains
     )
     print(
-        f"Stage 3 single-source | source={source_domain.value} | seed={seed} | "
-        f"device={device} | {'SMOKE' if smoke else 'FULL'}",
+        f"Stage 3 single-source | arm={config.arm} | source={source_domain.value} | "
+        f"seed={seed} | device={device} | {'SMOKE' if smoke else 'FULL'}",
         flush=True,
     )
+    if inactive_targets:
+        print(
+            "inactive domains not scored: "
+            + ", ".join(domain.value for domain in inactive_targets),
+            flush=True,
+        )
     print(
         f"locked source train={len(locked_views['train'])}, "
         f"val={len(locked_views['val'])} | target tests: {target_text}",
@@ -458,7 +542,7 @@ def _run_one(
         records=records,
         split_records=engine_splits,
         extra_test_sets=extra_test_sets,
-        split_policy=SINGLE_SOURCE_SPLIT_POLICY,
+        split_policy=single_source_split_policy(len(target_domains)),
         allow_resume=True,
     )
     # The engine takes exactly one primary test set, so it was handed the pooled
@@ -468,21 +552,28 @@ def _run_one(
     # renamed here so no reader or aggregator can reach for "test" by habit, and
     # the per-domain results take the obvious key instead.
     pooled = report.pop("test")
+    target_count = _number_word(len(target_domains))
     pooled["pooling"] = {
         "pooled_over_domains": [domain.value for domain in target_domains],
         "warning": (
-            "Pooled across three acquisition domains and therefore not a "
-            "per-domain result. Its HD95 also mixes RIM-ONE-DL, whose native "
-            "frame differs from the others. Report test_by_domain instead."
+            f"Pooled across {target_count} acquisition domains and therefore "
+            "not a per-domain result."
+            + (
+                " Its HD95 also mixes RIM-ONE-DL, whose native frame differs "
+                "from the others."
+                if Domain.RIM_ONE_DL in target_domains
+                else ""
+            )
+            + " Report test_by_domain instead."
         ),
     }
     report["test_pooled"] = pooled
     report["test_by_domain"] = report.pop("test_by_name")
     report["reporting_rule"] = (
         "Disc and cup metrics are separate; no combined Dice is reported. The "
-        "three target domains are scored separately in test_by_domain, which is "
-        "the reportable result; test_pooled averages them and must never be "
-        "quoted as a cross-domain score."
+        f"{target_count} target domains are scored separately in test_by_domain, "
+        "which is the reportable result; test_pooled averages them and must "
+        "never be quoted as a cross-domain score."
     )
     print("per-target-domain test Dice (the reportable result):", flush=True)
     for domain in target_domains:
@@ -500,6 +591,23 @@ def _run_one(
         "arm": config.experiment_name,
         "source_domain": source_domain.value,
         "target_domains": [domain.value for domain in target_domains],
+        # The protocol's domain set. A configured domain outside it (RIM-ONE-DL
+        # in Step 4) is discovered and validated but never scored as a target.
+        "active_domains": [domain.value for domain in config.active_domains],
+        "inactive_domains": [
+            partition.domain.value
+            for partition in manifest.budgeted_partitions
+            if partition.domain not in set(config.active_domains)
+        ],
+        "fold_shape": f"train on 1, test on {len(target_domains)}",
+        "conditioning_arm": config.arm,
+        # One source domain is one code. A conditioned model then sees a
+        # constant input to its FiLM generators, so the modulation is a fixed
+        # per-channel affine per level: a control that must match the plain
+        # arm, not a test of conditioning.
+        "degenerate_conditioning": config.arm != "plain",
+        "paired_with": config.paired_arm
+        or (DEFAULT_PLAIN_PAIRED_ARM if config.arm == "plain" else None),
         "run_seed": seed,
         "budget": {
             "train": config.train_budget,
@@ -574,11 +682,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         config = Stage3SingleSourceConfig.from_json(config_path)
         if config.arm != "plain":
             # One source domain means one code; a conditioned train-on-one arm
-            # would learn nothing the plain arm does not.
-            raise Stage3ConfigError(
-                "The train-on-one arm only supports arm='plain', got "
-                f"{config.arm!r}"
-            )
+            # learns nothing the plain arm does not. It runs as a sanity control
+            # (FiLM with one code must change nothing) and says so up front.
+            print(DEGENERATE_CONDITIONING_WARNING, file=sys.stderr, flush=True)
+            if config.test_conditioning == "nearest_domain":
+                # The per-domain rule decides one code for one held-out domain
+                # from a single-domain test set and a reference sample. This
+                # runner pools two target domains into the engine's test set,
+                # so it cannot supply either; with one code the per-image rule
+                # picks the same code for every image anyway.
+                raise Stage3ConfigError(
+                    "test_conditioning='nearest_domain' decides one code per "
+                    "held-out domain and needs a single-domain test set; the "
+                    "train-on-one runner pools its targets. Use 'nearest_image' "
+                    "(identical with one code)."
+                )
         if args.command == "prepare":
             return prepare(config, args.force)
         if args.command == "check":
