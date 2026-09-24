@@ -13,7 +13,7 @@
   "parent_manifest_dir": "splits/lodo",
   "fold_manifest_dir": "splits/single_source",
   "protocol": {
-    "policy": "fixed-budget leave-one-domain-out over three domains with Global (channel-wise) FiLM: train on the two active source domains' budgeted train partitions with the true source code, select on their pooled budgeted validation, and evaluate on the held-out domain's budgeted test partition with each image's code chosen by the nearest-source-domain rule",
+    "policy": "fixed-budget leave-one-domain-out over three domains with Global (channel-wise) FiLM: train on the two active source domains' budgeted train partitions with the true source code, select on their pooled budgeted validation, and evaluate on the held-out domain's budgeted test partition under one code for the whole domain: the source domain whose training colour centroid is nearest to the mean of the held-out domain's unlabelled reference sample (its budgeted train partition, labels unused, disjoint from the test images)",
     "held_out_domains": [
       "refuge_zeiss",
       "refuge_canon_val",

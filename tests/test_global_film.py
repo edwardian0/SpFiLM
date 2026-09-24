@@ -4,16 +4,20 @@ Three things are pinned. The layer is the draft's channel-wise FiLM and nothing
 more (identity at gamma = beta = 0, one scale and shift per channel, clamped).
 The conditioned U-Net is the plain U-Net plus that layer, so the plain arm is
 untouched and an old plain resume file still matches. And the test-time rule
-is the one agreed with the supervisor: a held-out image gets the code of the
-source domain whose training descriptor it is nearest to, chosen per image from
-the image alone, and never a code the model was not trained with.
+is the one agreed with the supervisor: the whole held-out domain gets one code,
+that of the source domain whose training descriptor centroid is nearest to its
+unlabelled reference sample (the per-image rule is kept as an ablation), and
+never a code the model was not trained with.
 """
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import hashlib
+import io
 import json
+import math
 import shutil
 import sys
 import tempfile
@@ -28,9 +32,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import aggregate_stage4_film  # noqa: E402
 from aggregate_stage3_fixed import (  # noqa: E402
     FixedLodoReportError,
     Substrate,
+    build_domain_cells,
     discover_fixed_runs,
     paired_tests,
     select_fixed_runs,
@@ -42,7 +48,10 @@ from run_stage3_lodo_3_1_fixed import (  # noqa: E402
     held_out_reference_keys,
 )
 from spfilm.lodo import DomainPartitions, SampleKey  # noqa: E402
-from spfilm.single_source import SingleSourceManifest  # noqa: E402
+from spfilm.single_source import (  # noqa: E402
+    SingleSourceManifest,
+    write_single_source_manifest,
+)
 from spfilm.engine import (  # noqa: E402
     FILM_CONFIG_FIELDS,
     Stage2Config,
@@ -653,21 +662,27 @@ class Stage4ConfigTests(unittest.TestCase):
                 _load(_write_temp_config(payload))
 
 
+def _synthetic_manifest() -> SingleSourceManifest:
+    """Four domains with a 4/2/3 budget, shaped like the committed manifest."""
+
+    partitions = []
+    strata = {}
+    for domain in sorted(Domain, key=lambda item: item.value):
+        prefix = domain.value[:3]
+        train = tuple(SampleKey(domain, f"{prefix}_tr{n}") for n in range(4))
+        val = tuple(SampleKey(domain, f"{prefix}_va{n}") for n in range(2))
+        test = tuple(SampleKey(domain, f"{prefix}_te{n}") for n in range(3))
+        partitions.append(DomainPartitions(domain=domain, train=train, val=val, test=test))
+        for key in train + val + test:
+            strata[key] = "all"
+    return SingleSourceManifest.build("a" * 64, tuple(partitions), 4, 2, 3, strata, 42)
+
+
 class ReferenceSampleTests(unittest.TestCase):
     """The held-out domain's reference sample is its budgeted train partition."""
 
     def setUp(self) -> None:
-        partitions = []
-        strata = {}
-        for domain in sorted(Domain, key=lambda item: item.value):
-            prefix = domain.value[:3]
-            train = tuple(SampleKey(domain, f"{prefix}_tr{n}") for n in range(4))
-            val = tuple(SampleKey(domain, f"{prefix}_va{n}") for n in range(2))
-            test = tuple(SampleKey(domain, f"{prefix}_te{n}") for n in range(3))
-            partitions.append(DomainPartitions(domain=domain, train=train, val=val, test=test))
-            for key in train + val + test:
-                strata[key] = "all"
-        self.manifest = SingleSourceManifest.build("a" * 64, tuple(partitions), 4, 2, 3, strata, 42)
+        self.manifest = _synthetic_manifest()
 
     def test_reference_is_the_held_out_train_partition_and_disjoint_from_the_fold(self) -> None:
         active = (Domain.DRISHTI_GS, Domain.REFUGE_CANON_VAL, Domain.REFUGE_ZEISS)
@@ -743,6 +758,155 @@ class TwoArmAggregationTests(unittest.TestCase):
         self.assertEqual((result.arm_a, result.arm_b), ("plain", "film"))
         self.assertAlmostEqual(result.mean_difference, 0.02)
         self.assertTrue(result.significant)
+
+
+PLAIN_ARM = "stage4_lodo_fixed_budget_plain_unet_3dom"
+FILM_ARM = "stage4_lodo_fixed_budget_global_film_3dom"
+
+
+def _write_lodo_run(
+    base: Path,
+    manifest_sha: str,
+    fold,
+    arm: str,
+    seed: int,
+    dice: float,
+    source_domains: list[str] | None = None,
+) -> Path:
+    """One fixed-budget LODO run as the runner writes it, scored on the fold's test IDs.
+
+    A FiLM run also carries the ``conditioning`` keys the report reads, shaped
+    as ``engine._conditioning_report`` writes them.
+    """
+
+    held_out = fold.held_out_domain
+    sources = source_domains or sorted({sample.domain.value for sample in fold.train})
+    run = base / f"{arm}_{held_out.value}_seed_{seed}"
+    run.mkdir(parents=True)
+    rows = [
+        {"image_id": sample.sample_id, "structure": structure,
+         "dice": f"{dice + 0.01 * index + 0.001 * (seed - 42):.4f}", "iou": "0.6",
+         "hd95": "10", "acc": "0.9", "tp": 1, "fp": 1, "fn": 1, "tn": 1}
+        for index, sample in enumerate(fold.test) for structure in ("disc", "cup")
+    ]
+    with (run / "test_per_image_metrics.csv").open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    payload: dict = {
+        "test": {"evaluated_sample_count": len(fold.test)},
+        "fixed_lodo": {
+            "protocol": "leave_one_domain_out_fixed_budget", "arm": arm,
+            "held_out_domain": held_out.value, "source_domains": sources, "run_seed": seed,
+            "budget": {"train": 4, "val": 2, "test": 3, "subsample_seed": 42},
+            "manifest_sha256": manifest_sha,
+            "completed_at_utc": f"2026-09-23T00:00:{seed - 40:02d}+00:00",
+            "smoke_rehearsal": False, "scientific_result": True,
+        },
+    }
+    if arm == FILM_ARM:
+        vocabulary = sorted(sources)
+        count = len(fold.test)
+        payload["conditioning"] = {
+            "vocabulary": vocabulary,
+            "test_conditioning": "nearest_domain",
+            "domain_decision": {"chosen_domain": vocabulary[0]},
+            "selector_validation": {"accuracy": 1.0, "domain_level_accuracy": 1.0},
+            "test": {
+                "assignment_counts": {code: count if i == 0 else 0 for i, code in enumerate(vocabulary)},
+                "nearest_image_counts": {code: count if i == 0 else 0 for i, code in enumerate(vocabulary)},
+            },
+            "fixed_code_sweep": {
+                code: {s: {"dice_mean": dice - 0.05 * i} for s in ("disc", "cup")}
+                for i, code in enumerate(vocabulary)
+            },
+            "best_fixed_code": {"disc": vocabulary[0], "cup": vocabulary[0]},
+            "nearest_domain_minus_best_fixed_code_dice": {"disc": 0.0, "cup": 0.0},
+        }
+    (run / "test_metrics.json").write_text(json.dumps(payload))
+    return run
+
+
+class LodoReportTests(unittest.TestCase):
+    """aggregate_stage4_film end to end, on a synthetic three-domain grid.
+
+    The first look after launching is seed 42 of each arm, so one seed per arm
+    must produce a report (no seed spread yet) rather than stop.
+    """
+
+    def setUp(self) -> None:
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.directory, True)
+        self.manifest = _synthetic_manifest()
+        self.manifest_path = self.directory / "single_source_manifest.json"
+        write_single_source_manifest(self.manifest, self.manifest_path)
+        self.manifest_sha = hashlib.sha256(self.manifest_path.read_bytes()).hexdigest()
+        self.folds = fixed_lodo_folds(self.manifest, tuple(sorted(STEP4_ACTIVE, key=lambda d: d.value)))
+        self.runs = self.directory / "runs"
+
+    def write_grid(self, seeds, film_extra_source: str | None = None) -> None:
+        for fold in self.folds:
+            sources = sorted({sample.domain.value for sample in fold.train})
+            film_sources = sorted([*sources, film_extra_source]) if film_extra_source else None
+            for seed in seeds:
+                _write_lodo_run(self.runs, self.manifest_sha, fold, PLAIN_ARM, seed, 0.80)
+                _write_lodo_run(self.runs, self.manifest_sha, fold, FILM_ARM, seed, 0.82,
+                                source_domains=film_sources)
+
+    def report(self, *seeds: int) -> tuple[int, str, str, str]:
+        report_path = self.directory / "report.md"
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = aggregate_stage4_film.main([
+                "--run-root", str(self.runs),
+                "--manifest", str(self.manifest_path),
+                "--expected-seeds", *map(str, seeds),
+                "--report-out", str(report_path),
+                "--csv-out", str(self.directory / "cells.csv"),
+            ])
+        report = report_path.read_text() if report_path.is_file() else ""
+        return code, stdout.getvalue(), stderr.getvalue(), report
+
+    def test_one_seed_per_arm_reports_without_a_seed_spread(self) -> None:
+        self.write_grid((42,))
+        code, stdout, stderr, report = self.report(42)
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("paired tests: 6", stdout)
+        self.assertIn("(1 seed)", report)
+        self.assertNotIn("± nan", report)
+        for fold in self.folds:
+            self.assertIn(f"| `{fold.held_out_domain.value}` | disc | 3 |", report)
+
+    def test_two_seeds_report_the_seed_spread(self) -> None:
+        self.write_grid((42, 43))
+        code, _stdout, stderr, report = self.report(42, 43)
+        self.assertEqual(code, 0, stderr)
+        self.assertNotIn("(1 seed)", report)
+        self.assertIn(" ± ", report)
+
+    def test_film_arm_trained_on_other_sources_is_not_paired(self) -> None:
+        """A FiLM grid whose folds included RIM-ONE-DL is not the plain 3-domain arm's pair."""
+
+        self.write_grid((42,), film_extra_source="rim_one_dl")
+        code, _stdout, stderr, _report = self.report(42)
+        self.assertEqual(code, 2)
+        self.assertIn("trained on", stderr)
+
+    def test_the_stage3_report_still_refuses_a_single_seed(self) -> None:
+        self.write_grid((42,))
+        runs = select_fixed_runs(discover_fixed_runs([self.runs]), (42,), arm=PLAIN_ARM)
+        with self.assertRaises(ValueError):
+            build_domain_cells(runs)
+        cells = build_domain_cells(runs, allow_single_seed=True)
+        dice = next(c for c in cells if c.structure == "disc").intervals["dice"]
+        self.assertEqual(dice.seeds, (42,))
+        self.assertAlmostEqual(dice.mean, 0.81)  # 0.80, 0.81, 0.82 over the fold's 3 images
+        self.assertTrue(math.isnan(dice.std))
+
+    def test_the_single_seed_flag_is_inert_with_two_seeds(self) -> None:
+        self.write_grid((42, 43))
+        runs = select_fixed_runs(discover_fixed_runs([self.runs]), (42, 43), arm=PLAIN_ARM)
+        self.assertEqual(build_domain_cells(runs), build_domain_cells(runs, allow_single_seed=True))
 
 
 if __name__ == "__main__":

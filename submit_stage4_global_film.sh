@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -l
 #SBATCH --job-name=film_s4
 #SBATCH --partition=interruptible_gpu
 #SBATCH --nodes=1
@@ -9,17 +9,19 @@
 #SBATCH --time=0-03:00:00
 #SBATCH --requeue
 #SBATCH --open-mode=append
+#SBATCH --export=NONE
 #SBATCH --output=/users/k23123868/edward/logs/film_s4_%j.out
 #SBATCH --error=/users/k23123868/edward/logs/film_s4_%j.err
 #SBATCH --constraint="a100|a40|a30|l40s|h100"
-#SBATCH --exclude=erc-hpc-comp[048,050,054,170-175,177,178,196,235-239,242,252,253]
+#SBATCH --exclude=erc-hpc-comp[048,050,054,170-175,177,178,196,223,235-239,242,252,253]
 #
 # Step 4 Global FiLM arm of the fixed-budget LODO over three domains (RIM-ONE-DL
 # dropped for now): train on two, test on the third, 80 train / 20 val / 50 test.
 # Same seeds, schedule and runner as the plain arm; only the config differs
 # (arm=global_film). Paired with submit_stage4_plain.sh on identical test sets.
-# FiLM adds five small MLPs and the folds are smaller than Stage 3's, so the 2 h
-# wall time is kept; confirm from the smoke job's epoch_seconds before the grid.
+# FiLM adds five small MLPs; the folds (80 train) are smaller than train-on-all's
+# (120), whose FiLM runs finished in ~20 min, so the 3 h limit is ample. Confirm
+# from the smoke job's epoch_seconds before the grid.
 # The full 3-domain x 5-seed protocol is 15 independent submissions.
 # Submit one run:
 #   sbatch /users/k23123868/edward/spfilm/submit_stage4_global_film.sh \
@@ -51,6 +53,15 @@ OUT_DIR="$CODE_ROOT/artifacts/runs/film_s4_${HELD_OUT_DOMAIN}_seed_${RUN_SEED}_$
 
 mkdir -p /users/k23123868/edward/logs "$OUT_DIR"
 
+# The job builds its own environment (login shell, --export=NONE) instead of
+# inheriting the submitting shell's. On 2026-09-14 five copies of this script
+# submitted from arc-hpc-login4 died at `module load` with Lmod 8.5.6's usage
+# text in .err and an empty .out, while the same script submitted earlier from
+# erc-hpc-login2 ran: the exported `module` function / Lmod state of the newer
+# login node does not work on the compute nodes, so it must not be inherited.
+echo "[$(date -u +%FT%TZ)] job $SLURM_JOB_ID on $(hostname), submitted from ${SLURM_SUBMIT_HOST:-unknown}"
+type module >/dev/null 2>&1 \
+  || { echo "FATAL: no module command on $(hostname); login profile not sourced" >&2; exit 1; }
 module load cuda
 module load anaconda3/2022.10-gcc-13.2.0
 eval "$(conda shell.bash hook)"

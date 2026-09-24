@@ -286,6 +286,10 @@ def _make_dataset(
 
 
 RESUME_STATE_FILENAME = "resume_state.pt"
+# training_curves.png is redrawn on this cadence so a run can be watched while
+# it trains (one render is ~0.2 s against epochs of several seconds); the final
+# render after training is the definitive one.
+TRAINING_CURVES_REFRESH_EPOCHS = 5
 
 
 def _resume_fingerprint(config: Stage2Config, split_counts: dict[str, int]) -> str:
@@ -1439,6 +1443,12 @@ def run_experiment(
         }
         history.append(row)
         _write_history(history, output_dir / "history.csv")
+        if epoch == start_epoch or epoch % TRAINING_CURVES_REFRESH_EPOCHS == 0:
+            save_training_curves(
+                history,
+                output_dir / "training_curves.png",
+                title=f"{config.experiment_name} | epoch {epoch}/{config.epochs} | training",
+            )
         if epoch_callback is None:
             print(
                 f"epoch={epoch:03d}/{config.epochs} "
@@ -1589,7 +1599,11 @@ def run_experiment(
                     smoke=smoke,
                 )
             )
-    save_training_curves(history, output_dir / "training_curves.png")
+    save_training_curves(
+        history,
+        output_dir / "training_curves.png",
+        title=f"{config.experiment_name} | {epochs_run} epochs | finished",
+    )
     save_prediction_gallery(
         model,
         test_dataset,

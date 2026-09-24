@@ -1,0 +1,13 @@
+kind,domain,structure,arm_plain,arm_film,test_images,dice_mean_plain,dice_mean_film,mean_difference,median_difference,method,p_value,p_adjusted,significant,seeds,own_code_dice,best_other_code_dice,worst_other_code_dice,penalty_own_minus_worst,own_code_was_best_seeds,dice_under_drishti_gs,dice_under_refuge_canon_val,dice_under_refuge_zeiss
+paired_test,drishti_gs,disc,stage4_all_domains_fixed_budget_plain_unet_3dom,stage4_all_domains_fixed_budget_global_film_3dom,50,0.959359,0.953689,-0.00567045,-0.00296383,wilcoxon,0.00331482,0.0165741,True,,,,,,,,,
+paired_test,drishti_gs,cup,stage4_all_domains_fixed_budget_plain_unet_3dom,stage4_all_domains_fixed_budget_global_film_3dom,50,0.860631,0.846713,-0.0139184,-0.0143929,wilcoxon,0.0112005,0.0448021,True,,,,,,,,,
+paired_test,refuge_canon_val,disc,stage4_all_domains_fixed_budget_plain_unet_3dom,stage4_all_domains_fixed_budget_global_film_3dom,50,0.943203,0.942696,-0.000507119,-0.00073946,wilcoxon,0.578629,1,False,,,,,,,,,
+paired_test,refuge_canon_val,cup,stage4_all_domains_fixed_budget_plain_unet_3dom,stage4_all_domains_fixed_budget_global_film_3dom,50,0.861665,0.866906,0.00524046,0.00277108,wilcoxon,0.533571,1,False,,,,,,,,,
+paired_test,refuge_zeiss,disc,stage4_all_domains_fixed_budget_plain_unet_3dom,stage4_all_domains_fixed_budget_global_film_3dom,50,0.934988,0.929952,-0.005036,-0.00305717,wilcoxon,0.00031079,0.00186474,True,,,,,,,,,
+paired_test,refuge_zeiss,cup,stage4_all_domains_fixed_budget_plain_unet_3dom,stage4_all_domains_fixed_budget_global_film_3dom,50,0.836184,0.831044,-0.00514015,-0.00754426,wilcoxon,0.0951333,0.2854,False,,,,,,,,,
+wrong_code_penalty,drishti_gs,disc,,,,,,,,,,,,42 43 44 45 46,0.953689,0.919134,0.853233,0.100455,5,0.953689,0.919134,0.853233
+wrong_code_penalty,drishti_gs,cup,,,,,,,,,,,,42 43 44 45 46,0.846713,0.729871,0.590375,0.256338,5,0.846713,0.729871,0.590375
+wrong_code_penalty,refuge_canon_val,disc,,,,,,,,,,,,42 43 44 45 46,0.942696,0.913833,0.893623,0.0490725,5,0.903118,0.942696,0.904339
+wrong_code_penalty,refuge_canon_val,cup,,,,,,,,,,,,42 43 44 45 46,0.866906,0.823464,0.753984,0.112921,5,0.753984,0.866906,0.823464
+wrong_code_penalty,refuge_zeiss,disc,,,,,,,,,,,,42 43 44 45 46,0.929952,0.90859,0.858361,0.0715912,5,0.858361,0.90859,0.929952
+wrong_code_penalty,refuge_zeiss,cup,,,,,,,,,,,,42 43 44 45 46,0.831044,0.787978,0.622788,0.208256,5,0.622788,0.787978,0.831044

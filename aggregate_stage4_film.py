@@ -4,10 +4,13 @@
 Both arms run the same fixed-budget leave-one-domain-out protocol from the same
 budgeted manifest, so for each held-out domain they score the identical test
 images and differ in one thing: the plain arm has no conditioning, the FiLM arm
-adds channel-wise FiLM to the encoder and picks each held-out image's code with
-the nearest-source-domain rule. This script reuses the fixed-budget aggregator's
-loading, per-domain summaries, and paired test, with FiLM as the reference arm
-so a positive difference reads "FiLM helped".
+adds channel-wise FiLM to the encoder and gives the whole held-out domain one
+code, chosen by the nearest-source-domain rule from its unlabelled reference
+images. This script reuses the fixed-budget aggregator's loading, per-domain
+summaries, and paired test, with FiLM as the reference arm so a positive
+difference reads "FiLM helped". A single seed per arm is accepted, so seed 42
+can be compared before the grid is launched; its cells show "(1 seed)" because
+there is no seed spread yet.
 
 It also reduces the conditioning diagnostics each FiLM run records: how well the
 selector recovers the true domain on source validation images, which codes the
@@ -43,6 +46,8 @@ from aggregate_stage3_fixed import (  # noqa: E402
     DEFAULT_EXPECTED_SEEDS,
     DEFAULT_MANIFEST,
     DEFAULT_RUN_ROOTS,
+    FIXED_METADATA_KEY,
+    FIXED_PROTOCOL,
     PAIRED_METHODS,
     DomainCell,
     FixedLodoReportError,
@@ -65,6 +70,7 @@ from spfilm.single_source import load_single_source_manifest  # noqa: E402
 
 DEFAULT_PLAIN_ARM = "stage4_lodo_fixed_budget_plain_unet_3dom"
 DEFAULT_FILM_ARM = "stage4_lodo_fixed_budget_global_film_3dom"
+REPORT_TITLE = "Step 4: Global FiLM against the plain U-Net, fixed-budget leave-one-domain-out"
 
 
 # --------------------------------------------------------------------------
@@ -83,9 +89,18 @@ def load_arm(
     arm: str,
     expected_seeds: Sequence[int],
     manifest_path: Path,
+    metadata_key: str = FIXED_METADATA_KEY,
+    protocol: str = FIXED_PROTOCOL,
 ) -> tuple[FixedRun, ...]:
+    """One arm's runs, each proven to have scored its fold's locked test images.
+
+    ``metadata_key`` and ``protocol`` name the runner whose runs are read; the
+    defaults are the Stage 3 / Step 4 fixed-budget runner, and
+    ``aggregate_stage5_lodo.py`` passes the Step 5 runner's.
+    """
+
     runs = select_fixed_runs(
-        _restrict_seeds(discover_fixed_runs(roots), expected_seeds),
+        _restrict_seeds(discover_fixed_runs(roots, metadata_key, protocol), expected_seeds),
         tuple(expected_seeds),
         arm=arm,
     )
@@ -305,6 +320,8 @@ def render_side_by_side(
                 if cell is None or "dice" not in cell.intervals:
                     return "—"
                 d = cell.intervals["dice"]
+                if len(d.seeds) < 2:
+                    return f"{d.mean:.4f} (1 seed)"
                 return f"{d.mean:.4f} ± {d.std:.4f}"
 
             if t is None:
@@ -359,13 +376,15 @@ def render_markdown_report(
     film_runs: Sequence[FixedRun],
     manifest_path: Path,
     method: str,
+    title: str = REPORT_TITLE,
+    tool: str = "aggregate_stage4_film.py",
 ) -> str:
     lines: list[str] = []
     add = lines.append
-    add("# Step 4: Global FiLM against the plain U-Net, fixed-budget leave-one-domain-out")
+    add(f"# {title}")
     add("")
     add(
-        "**Evidence boundary.** Every figure is computed by `aggregate_stage4_film.py` "
+        f"**Evidence boundary.** Every figure is computed by `{tool}` "
         f"from the per-image metric CSVs of {len(plain_runs)} plain and {len(film_runs)} "
         "Global FiLM runs, validated against the shared budgeted manifest "
         f"`{manifest_path.name}`. Interpretation is written by hand."
@@ -499,8 +518,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         plain = load_arm(roots, args.plain_arm, args.expected_seeds, manifest_path)
         film = load_arm(roots, args.film_arm, args.expected_seeds, manifest_path)
         require_same_folds(plain, film)
-        plain_cells = build_domain_cells(plain)
-        film_cells = build_domain_cells(film)
+        plain_cells = build_domain_cells(plain, allow_single_seed=True)
+        film_cells = build_domain_cells(film, allow_single_seed=True)
         substrate = build_two_arm_substrate(plain, film)
         results = paired_tests(substrate, method=args.method, reference_arm=args.film_arm)
         conditioning = build_conditioning_cells(film)

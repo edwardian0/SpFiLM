@@ -140,7 +140,8 @@ sbatch submit_stage4_global_film.sh drishti_gs 42
 The full protocol is 3 domains x 5 seeds x 2 arms = 30 submissions. Put the
 arms next to each other (FiLM minus plain on identical test images; the tool
 refuses to pair arms that trained on different source sets, and a partial grid
-pairs against the same seeds of the other arm):
+pairs against the same seeds of the other arm; with one seed per arm the Dice
+cells read "(1 seed)" because there is no seed spread yet):
 
 ```bash
 .spfilm/bin/python aggregate_stage4_film.py --expected-seeds 42 \
@@ -210,6 +211,60 @@ A Global FiLM run writes the Stage 3 artifacts plus:
   the FiLM generators. Plain runs record `arm: "plain"` and
   `conditioning: null` and are otherwise unchanged.
 
+## Step 5 quick start: leave-one-domain-out on its own runner
+
+Step 5 of the brief puts the conditioning arms head to head under the brief's
+protocol, leave-one-domain-out (Section 5), and is where SpFiLM joins. It has its
+own runner, configs, submit scripts and aggregator. The folds are the
+fixed-budget LODO folds over the three active domains — train on two (80 / 20),
+test on the held-out third (50) — composed by the same `fixed_lodo_folds` from
+the same locked budgeted manifest, so a held-out domain's 50 test images are the
+ones every other arm scores. The plain U-Net and Global FiLM arms are separate
+runs (separate SLURM jobs) whose configs differ only in `arm`. The Global FiLM
+arm gives the whole held-out domain one code with the agreed
+nearest-source-domain rule (`film.test_conditioning: "nearest_domain"`); the
+runner refuses the oracle code, which does not exist for an unseen domain.
+
+The Step 5 configs differ from the Step 4 LODO configs only in their names
+(a test asserts this): `stage4_plain_3dom*.json` / `stage4_global_film_3dom*.json`
+define the same comparison through `run_stage3_lodo_3_1_fixed.py`, so running
+both sets would duplicate the 30 jobs. What the Step 5 runner adds is identity:
+it writes a `stage5_lodo` block (and `stage5_lodo_run.json`,
+`resolved_stage5_config.json`) instead of `fixed_lodo`, so Step 5 runs never
+enter a Stage 3 or Step 4 report and `aggregate_stage5_lodo.py` sees nothing
+else. Otherwise a run's outputs are those of the Step 4 LODO arms (Stage 4
+output contract above).
+
+```bash
+.spfilm/bin/python run_stage5_lodo.py \
+  --config configs/stage5_lodo_global_film_3dom.json check --skip-mask-audit
+
+.spfilm/bin/python run_stage5_lodo.py \
+  --config configs/stage5_lodo_global_film_3dom.json run \
+  --held-out-domain drishti_gs --seed 42 --smoke --device cpu
+
+sbatch --time=0-00:20:00 submit_stage5_lodo_global_film.sh drishti_gs 42 --smoke
+sbatch submit_stage5_lodo_plain.sh drishti_gs 42
+sbatch submit_stage5_lodo_global_film.sh drishti_gs 42
+```
+
+3 held-out domains x 5 seeds x 2 arms = 30 submissions (jobs `plain_s5` and
+`gfilm_s5`, run directories `artifacts/runs/{plain,gfilm}_s5_<domain>_seed_<seed>_<job>`).
+Aggregate — FiLM minus plain per held-out domain on identical images, seeds
+averaged per image, Wilcoxon, Holm; the code each held-out domain was given and
+the fixed-code sweep; with one seed per arm the Dice cells read "(1 seed)":
+
+```bash
+.spfilm/bin/python aggregate_stage5_lodo.py --expected-seeds 42 \
+  --report-out run_reports/stage5_lodo.md --csv-out run_reports/stage5_lodo_cells.csv
+```
+
+Nothing in the runner branches on which conditioning an arm uses, only on
+whether it has one: once `spatial_film` is an arm, a
+`stage5_lodo_spatial_film_*` config (copied from the Global FiLM one) runs
+through the same runner and is compared with plain by passing its experiment
+name as `--film-arm`.
+
 ## Directory map
 
 ```text
@@ -236,6 +291,9 @@ spfilm/
 ├── aggregate_stage4_film.py            # LODO: FiLM next to plain, paired test, selector diagnostics
 ├── run_stage4_all_domains.py           # train on all active domains, test on each (both arms)
 ├── aggregate_stage4_all_domains.py     # train-on-all: FiLM next to plain + wrong-code penalty
+├── run_stage5_lodo.py                  # Step 5 LODO runner: train on all active domains but one
+├── aggregate_stage5_lodo.py            # Step 5 LODO: conditioned arm next to plain, paired test
+├── plot_training_curves.py             # training curves from any run's history.csv, mid-run or after
 ├── submit_lodo_stage3.sh               # one CREATE fold/seed submission
 ├── STAGE2.md                           # research and execution protocol
 └── artifacts/                          # generated locally
@@ -250,6 +308,12 @@ A real run writes the following under `artifacts/stage2_refuge/`:
 - `mask_contact_sheet.png`: twelve source images with normalized masks.
 - `best_model.pt`: checkpoint selected by validation loss, not test Dice.
 - `history.csv` and `training_curves.png`: epoch-level training evidence.
+  `history.csv` is rewritten after every epoch and `training_curves.png`
+  (loss, validation Dice, learning rate, with the best epoch and the epoch the
+  early-stopping rule fired marked) is redrawn every 5 epochs, so a run can be
+  watched while it trains. `python plot_training_curves.py <run-dir>...`
+  renders the same figure from `history.csv` on demand -- mid-run, after a
+  preemption, or on a run directory synced down without its checkpoints.
 - `test_metrics.json`: disc and cup Dice/IoU reported separately.
 - `test_predictions.png`: targets, predictions, false positives, and false negatives.
 - `resolved_config.json`: the settings that actually ran.

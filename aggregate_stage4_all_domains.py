@@ -353,7 +353,7 @@ def render_side_by_side(
 
 def render_penalty_table(cells: Sequence[PenaltyCell]) -> str:
     lines = [
-        "| Test domain | Structure | Own code Dice | Best other code | Worst other code | "
+        "| Test domain | Structure | Own code Dice | Best other code (per seed) | Worst other code (per seed) | "
         "Penalty (own − worst) | Own code best in N/seeds | Dice under each code (mean over seeds) |",
         "|---|---|---:|---:|---:|---:|:---:|---|",
     ]
@@ -411,8 +411,11 @@ def render_markdown_report(
     add(
         "Each FiLM model was also scored on every test domain under every *other* domain's "
         "code. 'Penalty' is Dice under the domain's own code minus Dice under the worst other "
-        "code. A penalty near zero means the codes are interchangeable and the FiLM layers are "
-        "inert; a clear penalty means the code carries information the network acts on."
+        "code, where best and worst are taken per seed and then averaged, so they can differ "
+        "from the per-code means in the last column when the ordering of the other codes "
+        "changes between seeds. A penalty near zero means the codes are interchangeable and "
+        "the FiLM layers are inert; a clear penalty means the code carries information the "
+        "network acts on."
     )
     add("")
     add(render_penalty_table(penalties))

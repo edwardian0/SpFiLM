@@ -64,6 +64,7 @@ from spfilm.single_source import load_single_source_manifest  # noqa: E402
 TEST_METRICS_NAME = "test_metrics.json"
 FIXED_PER_IMAGE_CSV = "test_per_image_metrics.csv"
 FIXED_PROTOCOL = "leave_one_domain_out_fixed_budget"
+FIXED_METADATA_KEY = "fixed_lodo"
 DEFAULT_MANIFEST = (
     PROJECT_ROOT / "splits" / "single_source" / "single_source_manifest.json"
 )
@@ -118,12 +119,23 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def build_fixed_run(metrics_path: Path) -> FixedRun | None:
+def build_fixed_run(
+    metrics_path: Path,
+    metadata_key: str = FIXED_METADATA_KEY,
+    protocol: str = FIXED_PROTOCOL,
+) -> FixedRun | None:
+    """Load one fixed-budget LODO run, or None when the file is another protocol's.
+
+    ``metadata_key`` and ``protocol`` say whose runs to read. The Step 5 runner
+    writes this schema under its own key and protocol name, so its runs never
+    enter a Stage 3 or Step 4 report, and a Step 5 report sees nothing else.
+    """
+
     payload = _read_json(metrics_path)
-    metadata = payload.get("fixed_lodo")
+    metadata = payload.get(metadata_key)
     if not isinstance(metadata, dict):
         return None
-    if metadata.get("protocol") != FIXED_PROTOCOL:
+    if metadata.get("protocol") != protocol:
         return None
     if metadata.get("smoke_rehearsal") is True:
         return None
@@ -158,14 +170,18 @@ def build_fixed_run(metrics_path: Path) -> FixedRun | None:
     )
 
 
-def discover_fixed_runs(roots: Iterable[str | Path]) -> tuple[FixedRun, ...]:
+def discover_fixed_runs(
+    roots: Iterable[str | Path],
+    metadata_key: str = FIXED_METADATA_KEY,
+    protocol: str = FIXED_PROTOCOL,
+) -> tuple[FixedRun, ...]:
     found: dict[Path, FixedRun] = {}
     for root in roots:
         root_path = Path(root).expanduser().resolve()
         if not root_path.is_dir():
             raise FixedLodoReportError(f"Run root is not a directory: {root_path}")
         for metrics_path in sorted(root_path.rglob(TEST_METRICS_NAME)):
-            run = build_fixed_run(metrics_path)
+            run = build_fixed_run(metrics_path, metadata_key, protocol)
             if run is not None:
                 found[metrics_path] = run
     return tuple(
@@ -378,7 +394,38 @@ class DomainCell:
     hd95_excluded_total: int
 
 
-def build_domain_cells(runs: Sequence[FixedRun]) -> tuple[DomainCell, ...]:
+def _single_seed_interval(
+    metric: str, seeds: Sequence[int], values: Sequence[float]
+) -> SeedInterval:
+    """One seed has a mean but no spread: every spread field is NaN."""
+
+    value = float(values[0])
+    if not math.isfinite(value):
+        raise FixedLodoReportError(f"{metric}: the seed value must be finite, got {value!r}")
+    return SeedInterval(
+        metric=metric,
+        seeds=tuple(seeds),
+        values=(value,),
+        mean=value,
+        std=math.nan,
+        half_width=math.nan,
+        low=math.nan,
+        high=math.nan,
+        confidence=CONFIDENCE_LEVEL,
+    )
+
+
+def build_domain_cells(
+    runs: Sequence[FixedRun], allow_single_seed: bool = False
+) -> tuple[DomainCell, ...]:
+    """Reduce each held-out domain and structure over its seeds.
+
+    A seed interval needs at least two seeds, and this report's intervals are
+    its result, so one seed is refused by default. ``allow_single_seed`` lets a
+    first look at one seed per arm through (the Step 4 comparison before the
+    grid is launched): the cell then holds that seed's mean with a NaN spread.
+    """
+
     cells: list[DomainCell] = []
     for domain in sorted({r.held_out_domain for r in runs}, key=lambda d: d.value):
         domain_runs = sorted(
@@ -421,7 +468,11 @@ def build_domain_cells(runs: Sequence[FixedRun]) -> tuple[DomainCell, ...]:
                 series = [s[metric] for s in summaries]
                 if any(v is None for v in series):
                     continue
-                intervals[metric] = seed_confidence_interval(metric, seeds, series)
+                intervals[metric] = (
+                    _single_seed_interval(metric, seeds, series)
+                    if allow_single_seed and len(seeds) == 1
+                    else seed_confidence_interval(metric, seeds, series)
+                )
             cells.append(
                 DomainCell(
                     held_out_domain=domain,

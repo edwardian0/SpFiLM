@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import math
 import random
 from pathlib import Path
@@ -87,28 +88,111 @@ def save_mask_contact_sheet(
     return output_path
 
 
-def save_training_curves(history: list[dict[str, float]], output_path: str | Path) -> Path:
+# --- Training curves ------------------------------------------------------------
+#
+# The engine rewrites ``history.csv`` after every epoch and redraws
+# ``training_curves.png`` every few epochs, so a run can be watched while it trains;
+# ``plot_training_curves.py`` renders the same figure from the CSV on demand, for a
+# run that is still going, was preempted, or has finished.
+
+HISTORY_FILENAME = "history.csv"
+TRAINING_CURVES_FILENAME = "training_curves.png"
+HISTORY_REQUIRED_COLUMNS = ("epoch", "train_loss", "val_loss", "val_disc_dice", "val_cup_dice")
+
+
+def load_history(path: str | Path) -> list[dict[str, float]]:
+    """Read a run's ``history.csv`` back into the engine's per-epoch rows."""
+
+    path = Path(path)
+    with path.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        rows = [{key: float(value) for key, value in row.items()} for row in reader]
+    if not rows:
+        raise ValueError(f"{path} holds no completed epochs")
+    missing = [column for column in HISTORY_REQUIRED_COLUMNS if column not in rows[0]]
+    if missing:
+        raise ValueError(f"{path} lacks history columns {missing}")
+    return rows
+
+
+def best_epoch_from_history(history: Sequence[Mapping[str, float]]) -> int | None:
+    """The epoch the engine checkpointed as best.
+
+    The engine resets ``epochs_without_improvement`` to zero exactly when it
+    saves ``best_model.pt``, so the last row with a zero counter is that epoch
+    under the engine's own min-delta rule -- not merely the argmin of val loss.
+    Older histories without the column give ``None``.
+    """
+
+    if not history or "epochs_without_improvement" not in history[0]:
+        return None
+    best = [row["epoch"] for row in history if row["epochs_without_improvement"] == 0]
+    return int(best[-1]) if best else None
+
+
+def early_stop_epoch_from_history(history: Sequence[Mapping[str, float]]) -> int | None:
+    """The epoch the early-stopping rule first fired, or ``None`` if it has not."""
+
+    if not history or "would_have_stopped_at_epoch" not in history[-1]:
+        return None
+    value = history[-1]["would_have_stopped_at_epoch"]
+    return int(value) if value >= 0 else None
+
+
+def _mark_epochs(axis, best_epoch: int | None, stop_epoch: int | None) -> None:
+    if best_epoch is not None:
+        axis.axvline(
+            best_epoch, color="0.35", linestyle="--", linewidth=1,
+            label=f"best val loss (epoch {best_epoch})",
+        )
+    if stop_epoch is not None:
+        axis.axvline(
+            stop_epoch, color="tab:red", linestyle=":", linewidth=1,
+            label=f"early-stop rule fired (epoch {stop_epoch})",
+        )
+
+
+def save_training_curves(
+    history: Sequence[Mapping[str, float]],
+    output_path: str | Path,
+    title: str | None = None,
+) -> Path:
+    """Draw loss, validation Dice and (when logged) learning rate against epoch.
+
+    Marks the best epoch and the epoch the early-stopping rule fired when the
+    history carries those columns. Works on a partial history, so it is safe to
+    call mid-training.
+    """
+
+    if not history:
+        raise ValueError("Cannot draw training curves from an empty history")
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     epochs = [int(row["epoch"]) for row in history]
-    figure, axes = plt.subplots(1, 2, figsize=(12, 4))
+    best_epoch = best_epoch_from_history(history)
+    stop_epoch = early_stop_epoch_from_history(history)
+    has_learning_rate = "learning_rate" in history[0]
+    panels = 3 if has_learning_rate else 2
+    figure, axes = plt.subplots(1, panels, figsize=(6 * panels, 4))
+
     axes[0].plot(epochs, [row["train_loss"] for row in history], label="train")
     axes[0].plot(epochs, [row["val_loss"] for row in history], label="validation")
+    _mark_epochs(axes[0], best_epoch, stop_epoch)
     axes[0].set(title="Loss", xlabel="Epoch", ylabel="BCE + soft Dice")
-    axes[0].legend()
+    axes[0].legend(fontsize=8)
 
-    axes[1].plot(
-        epochs,
-        [row["val_disc_dice"] for row in history],
-        label="disc Dice",
-    )
-    axes[1].plot(
-        epochs,
-        [row["val_cup_dice"] for row in history],
-        label="cup Dice",
-    )
+    axes[1].plot(epochs, [row["val_disc_dice"] for row in history], label="disc Dice")
+    axes[1].plot(epochs, [row["val_cup_dice"] for row in history], label="cup Dice")
+    _mark_epochs(axes[1], best_epoch, stop_epoch)
     axes[1].set(title="Validation Dice", xlabel="Epoch", ylabel="Dice", ylim=(0, 1))
-    axes[1].legend()
+    axes[1].legend(fontsize=8)
+
+    if has_learning_rate:
+        axes[2].plot(epochs, [row["learning_rate"] for row in history], color="tab:green")
+        axes[2].set(title="Learning rate", xlabel="Epoch", ylabel="LR", yscale="log")
+
+    if title:
+        figure.suptitle(title, fontsize=11)
     figure.tight_layout()
     figure.savefig(output_path, dpi=160, bbox_inches="tight")
     plt.close(figure)
