@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=9
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
-#SBATCH --time=0-03:00:00
+#SBATCH --time=0-02:00:00
 #SBATCH --requeue
 #SBATCH --open-mode=append
 #SBATCH --export=NONE

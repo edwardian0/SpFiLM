@@ -156,35 +156,51 @@ class SpatialFiLM(nn.Module):
 
         gamma_bar, A, beta_bar, B = self.coefficients(embedding)
 
-        if self.rank != 0:
-            raise NotImplementedError()
         batch_size = embedding.shape[0]
         height, width = size
 
-        gamma = gamma_bar.reshape(batch_size, self.num_channels, 1, 1)
-        beta = beta_bar.reshape(batch_size, self.num_channels, 1, 1)
+        gamma_global = gamma_bar.reshape(batch_size, self.num_channels, 1, 1)
+        beta_global = beta_bar.reshape(batch_size, self.num_channels, 1, 1)
 
-        gamma = gamma.expand(-1, -1, height, width)
-        beta = beta.expand(-1, -1, height, width)
-
-        gamma = gamma.clamp(-self.clamp, self.clamp)
-        beta = beta.clamp(-self.clamp, self.clamp)
-
-        if self.rank >= 1:
-            phi = self.basis_beta(image.float())
-            psi = self.basis_gamma(image.float())
+        if self.rank == 0:
+            gamma = gamma_global.expand(-1, -1, height, width)
+            beta = beta_global.expand(-1, -1, height, width)
+        else:
+            phi = self.basis_gamma(image.float())
+            psi = self.basis_beta(image.float())
 
             phi_flat = phi.flatten(start_dim=2)
             psi_flat = psi.flatten(start_dim=2)
 
-            gamma_spatial = torch.bmm(A, phi_flat)
-            beta_spatial = torch.bmm(B, psi_flat)
+            gamma_spatial = torch.bmm(A, phi_flat).reshape(
+                batch_size,
+                self.num_channels,
+                height,
+                width,
+            )
+            beta_spatial = torch.bmm(B, psi_flat).reshape(
+                batch_size,
+                self.num_channels,
+                height,
+                width,
+            )
 
-            gamma_spatial = gamma_spatial.reshape(
-            batch_size, self.num_channels, height, width
-        )
-            beta_spatial = beta_spatial.reshape(
-            batch_size, self.num_channels, height, width
-        )
+            gamma = gamma_global + gamma_spatial
+            beta = beta_global + beta_spatial
 
+        gamma = gamma.clamp(-self.clamp, self.clamp)
+        beta = beta.clamp(-self.clamp, self.clamp)
+
+        # FOV Gating
+        if self.fov_gating and fov_mask is not None:
+            if tuple(fov_mask.shape[-2:]) != tuple(fov_mask.size()):
+                raise ValueError(
+                    f"FOV mask must be (N, embedding_dim), got "
+                    f"{tuple(embedding.shape)}"
+                )
+
+            if self.num_channels != 1:
+                raise ValueError()
+
+            if 
         return gamma, beta
