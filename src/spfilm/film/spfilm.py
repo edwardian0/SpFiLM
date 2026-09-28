@@ -1,8 +1,9 @@
 """Rank-K Spatial FiLM layers for two-dimensional feature maps.
 
 Spatial FiLM augments the global per-channel scale and shift with independent,
-image-conditioned scale and shift basis maps. Domain-conditioned coefficients
-mix those bases into dense fields before applying ``(1 + gamma) * F + beta``.
+image-conditioned scale and shift basis maps. Coefficients generated from the
+conditioning signal mix those bases into dense fields before applying
+``(1 + gamma) * F + beta``.
 With rank zero there are no basis modules and the layer reduces numerically to
 ``GlobalFiLM``. This is the 2D adaptation of the reference 3D layer: it uses
 ``Conv2d``/``InstanceNorm2d`` and bilinear interpolation. Modulation runs in
@@ -22,7 +23,8 @@ DEFAULT_BASIS_HIDDEN_CHANNELS = 16
 class SpatialBasis(nn.Module):
     """Generate K smooth image-conditioned basis maps in [-1, 1].
 
-    An instance supplies either φ (scale) or ψ (shift), independently of the domain code.
+    An instance supplies either φ (scale) or ψ (shift), independently of the
+    conditioning signal.
     """
 
     def __init__(

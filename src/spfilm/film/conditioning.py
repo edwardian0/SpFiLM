@@ -158,6 +158,24 @@ def fov_descriptor(images: torch.Tensor) -> torch.Tensor:
     return torch.cat([means, stds], dim=1)
 
 
+def fov_mask(images: torch.Tensor) -> torch.Tensor:
+    """Field-of-view mask ``(N, 1, H, W)`` of a ``(N, 3, H, W)`` batch: 1 inside, 0 outside.
+
+    The luminance rule of ``fov_descriptor``, so the pixels SpFiLM's FOV gating
+    leaves unmodulated (the black surround and the letterbox border) are the
+    ones the conditioning signal's descriptor ignores. There is deliberately no
+    empty-mask fallback: an image with no field of view gets no modulation
+    anywhere, which is what gating means.
+    """
+
+    if images.dim() != 4 or images.shape[1] != 3:
+        raise ValueError(f"images must be (N, 3, H, W), got {tuple(images.shape)}")
+    pixels = images.float()
+    weights = torch.tensor(LUMA_WEIGHTS, dtype=pixels.dtype, device=pixels.device)
+    luminance = torch.einsum("nchw,c->nhw", pixels, weights)
+    return (luminance > FOV_LUMINANCE_THRESHOLD).to(pixels.dtype)[:, None, :, :]
+
+
 @dataclass(frozen=True)
 class NearestDomainSelector:
     """Nearest-source-domain rule fitted on one fold's training images."""

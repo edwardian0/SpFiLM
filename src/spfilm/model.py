@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from .film.conditioning import fov_mask
 from .film.global_film import (
     DEFAULT_CLAMP,
     DEFAULT_EMBEDDING_DIM,
@@ -11,6 +12,7 @@ from .film.global_film import (
     DomainOneHot,
     GlobalFiLM,
 )
+from .film.spfilm import DEFAULT_RANK, SpatialFiLM
 
 
 class DoubleConv(nn.Module):
@@ -171,10 +173,132 @@ class ConditionedUNet(nn.Module):
         features = net.up4(features, skip1)
         return net.output(features)
 
-class SpatialFiLMUNet():
-    pass
+class SpatialFiLMUNet(nn.Module):
+    """``PlainUNet`` with Spatial FiLM after each encoder block; its K=0 case is ``ConditionedUNet``.
 
-ARMS = ("plain", "global_film")
+    The skeleton is ``ConditionedUNet``'s: a real ``PlainUNet`` backbone, the
+    frozen one-hot conditioning signal, and one conditioning layer on each
+    encoder ``DoubleConv`` output and on the bottleneck, ``film_levels``
+    counted from the shallowest. Each layer is a rank-``rank`` ``SpatialFiLM``
+    whose basis generators read the network's input image at that level's
+    resolution: the input itself at level 0, bilinearly downsampled below. The
+    image is resampled, never the features, so the bases describe where things
+    are in the fundus photograph rather than what the backbone made of it.
+    With ``rank=0`` the layers have no basis generators and the network is
+    ``ConditionedUNet``, state dict for state dict.
+
+    The stride-2 basis convolution halves the bottleneck grid again and its
+    InstanceNorm needs more than one pixel, so five conditioned levels need
+    inputs of at least 48 px (runs use 512, smokes 128).
+
+    ``fov_gating`` (off by default) computes the field-of-view mask once from
+    the input and hands it to every layer, which nearest-resamples it to its
+    grid, so the black surround and the letterbox border are never modulated.
+    """
+
+    ENCODER_LEVELS = 5
+
+    def __init__(
+        self,
+        num_domains: int,
+        in_channels: int = 3,
+        out_channels: int = 2,
+        base_channels: int = 32,
+        film_levels: int = ENCODER_LEVELS,
+        embedding_dim: int = DEFAULT_EMBEDDING_DIM,
+        hidden_dim: int = DEFAULT_HIDDEN_DIM,
+        clamp: float = DEFAULT_CLAMP,
+        rank: int = DEFAULT_RANK,
+        fov_gating: bool = False,
+    ) -> None:
+        super().__init__()
+        if not 1 <= film_levels <= self.ENCODER_LEVELS:
+            raise ValueError(
+                f"film_levels must be in [1, {self.ENCODER_LEVELS}], got {film_levels}"
+            )
+        if not 1 <= num_domains <= embedding_dim:
+            raise ValueError(
+                f"num_domains must be in [1, {embedding_dim}], got {num_domains}"
+            )
+        if fov_gating and in_channels != 3:
+            # The mask is the RGB luminance rule of the conditioning descriptor.
+            raise ValueError(
+                f"fov_gating needs RGB inputs (in_channels=3), got in_channels={in_channels}"
+            )
+        self.num_domains = num_domains
+        self.film_levels = film_levels
+        self.rank = rank
+        self.fov_gating = fov_gating
+        self.backbone = PlainUNet(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            base_channels=base_channels,
+        )
+        self.one_hot = DomainOneHot(embedding_dim)
+        c1 = base_channels
+        widths = (c1, c1 * 2, c1 * 4, c1 * 8, c1 * 16)
+        self.films = nn.ModuleList(
+            SpatialFiLM(
+                width,
+                rank=rank,
+                embedding_dim=embedding_dim,
+                hidden_dim=hidden_dim,
+                clamp=clamp,
+                in_channels=in_channels,
+                fov_gating=fov_gating,
+            )
+            for width in widths[:film_levels]
+        )
+
+    def _film(
+        self,
+        level: int,
+        features: torch.Tensor,
+        inputs: torch.Tensor,
+        embedding: torch.Tensor,
+        mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if level >= self.film_levels:
+            return features
+        image = (
+            inputs
+            if level == 0
+            else F.interpolate(
+                inputs, size=features.shape[-2:], mode="bilinear", align_corners=False
+            )
+        )
+        return self.films[level](features, image, embedding, mask)
+
+    def forward(self, inputs: torch.Tensor, domain_index: torch.Tensor) -> torch.Tensor:
+        if domain_index.numel() and int(domain_index.max()) >= self.num_domains:
+            raise ValueError(
+                f"domain_index {int(domain_index.max())} is outside the "
+                f"{self.num_domains} trained conditioning signals"
+            )
+        net = self.backbone
+        embedding = self.one_hot(domain_index)
+        mask = fov_mask(inputs) if self.fov_gating else None
+        skip1 = self._film(0, net.down1.convolutions(inputs), inputs, embedding, mask)
+        skip2 = self._film(
+            1, net.down2.convolutions(net.down1.pool(skip1)), inputs, embedding, mask
+        )
+        skip3 = self._film(
+            2, net.down3.convolutions(net.down2.pool(skip2)), inputs, embedding, mask
+        )
+        skip4 = self._film(
+            3, net.down4.convolutions(net.down3.pool(skip3)), inputs, embedding, mask
+        )
+        features = self._film(
+            4, net.bottleneck(net.down4.pool(skip4)), inputs, embedding, mask
+        )
+        features = net.up1(features, skip4)
+        features = net.up2(features, skip3)
+        features = net.up3(features, skip2)
+        features = net.up4(features, skip1)
+        return net.output(features)
+
+
+ARMS = ("plain", "global_film", "spatial_film")
 
 
 def build_model(
@@ -185,14 +309,26 @@ def build_model(
     embedding_dim: int = DEFAULT_EMBEDDING_DIM,
     hidden_dim: int = DEFAULT_HIDDEN_DIM,
     clamp: float = DEFAULT_CLAMP,
+    rank: int = 0,
+    fov_gating: bool = False,
 ) -> nn.Module:
-    """The one place that maps an experimental arm to a network."""
+    """The one place that maps an experimental arm to a network.
+
+    ``rank`` and ``fov_gating`` configure the spatial term, so only the spatial
+    arm takes them. Global FiLM refuses them rather than ignoring them: an arm
+    must differ from its comparator in exactly one thing, and a silently
+    dropped setting would make a config say something the network is not.
+    """
 
     if arm == "plain":
         return PlainUNet(base_channels=base_channels)
     if arm == "global_film":
         if num_domains is None:
             raise ValueError("global_film needs the number of source domains")
+        if rank != 0 or fov_gating:
+            raise ValueError(
+                "global_film has no spatial term; rank and fov_gating belong to spatial_film"
+            )
         return ConditionedUNet(
             num_domains=num_domains,
             base_channels=base_channels,
@@ -202,7 +338,20 @@ def build_model(
             clamp=clamp,
         )
     if arm == "spatial_film":
-        return SpatialFiLMUNet
-    
+        if num_domains is None:
+            raise ValueError("spatial_film needs the number of source domains")
+        if rank < 1:
+            # Rank 0 is numerically global_film, which has its own arm and runs.
+            raise ValueError(f"spatial_film needs rank >= 1, got {rank}; use global_film")
+        return SpatialFiLMUNet(
+            num_domains=num_domains,
+            base_channels=base_channels,
+            film_levels=film_levels,
+            embedding_dim=embedding_dim,
+            hidden_dim=hidden_dim,
+            clamp=clamp,
+            rank=rank,
+            fov_gating=fov_gating,
+        )
     raise ValueError(f"Unknown arm {arm!r}; expected one of {ARMS}")
 

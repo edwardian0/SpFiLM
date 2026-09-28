@@ -6,8 +6,9 @@ images every other arm scores); the two configs differ only in the arm, and
 from the Step 4 LODO configs only in their names; a conditioned arm decides its
 code from the held-out domain's unlabelled reference sample and cannot use the
 oracle code; the runner writes its own metadata block, which the Step 5
-aggregator reads and the Stage 3 / Step 4 tools ignore; and what the runner
-writes is what the aggregator reads.
+aggregator reads and the Stage 3 / Step 4 tools ignore; what the runner
+writes is what the aggregator reads; and once SpFiLM joins, it is compared with
+plain and with Global FiLM, both conditioned arms' diagnostics side by side.
 """
 
 from __future__ import annotations
@@ -479,6 +480,8 @@ def _write_run(
     metadata_key: str = runner.STAGE5_LODO_METADATA_KEY,
     protocol: str = runner.STAGE5_LODO_PROTOCOL_NAME,
     smoke: bool = False,
+    conditioning_arm: str | None = None,
+    parameter_count: int | None = None,
 ) -> Path:
     held_out = fold.held_out_domain
     sources = sorted({sample.domain.value for sample in fold.train})
@@ -490,6 +493,7 @@ def _write_run(
         "test": {"evaluated_sample_count": len(fold.test)},
         metadata_key: {
             "protocol": protocol, "arm": arm, "held_out_domain": held_out.value,
+            "conditioning_arm": conditioning_arm or ("global_film" if conditioned else "plain"),
             "source_domains": sources, "run_seed": seed,
             "budget": {"train": TRAIN, "val": VAL, "test": TEST, "subsample_seed": 42},
             "manifest_sha256": manifest_sha,
@@ -499,12 +503,14 @@ def _write_run(
     }
     if conditioned:
         payload["conditioning"] = _conditioning_block(sources, len(fold.test), value)
+    if parameter_count is not None:
+        payload["parameter_count"] = parameter_count
     (run / "test_metrics.json").write_text(json.dumps(payload))
     return run
 
 
-class AggregatorTests(unittest.TestCase):
-    """A run root holding both Step 4 and Step 5 grids, as artifacts/runs will."""
+class _RunRoot:
+    """A temporary run root over the synthetic manifest, and a way to aggregate it."""
 
     def setUp(self) -> None:
         self.directory = Path(tempfile.mkdtemp())
@@ -515,6 +521,22 @@ class AggregatorTests(unittest.TestCase):
         self.manifest_sha = hashlib.sha256(self.manifest_path.read_bytes()).hexdigest()
         self.folds = fixed_runner.fixed_lodo_folds(manifest, ACTIVE)
         self.runs = self.directory / "runs"
+
+    def report(self, module, *seeds: int, extra: tuple[str, ...] = ()) -> tuple[int, str, str, str]:
+        report_path = self.directory / f"{module.__name__}.md"
+        code, stdout, stderr = _run_main(module, [
+            "--run-root", str(self.runs),
+            "--manifest", str(self.manifest_path),
+            "--expected-seeds", *map(str, seeds),
+            "--report-out", str(report_path),
+            "--csv-out", str(self.directory / f"{module.__name__}.csv"),
+            *extra,
+        ])
+        return code, stdout, stderr, report_path.read_text() if report_path.is_file() else ""
+
+
+class AggregatorTests(_RunRoot, unittest.TestCase):
+    """A run root holding both Step 4 and Step 5 grids, as artifacts/runs will."""
 
     def write_step5(self, seeds=(42,), film_smoke: bool = False) -> None:
         for fold in self.folds:
@@ -532,18 +554,6 @@ class AggregatorTests(unittest.TestCase):
                                conditioned=conditioned, metadata_key="fixed_lodo",
                                protocol="leave_one_domain_out_fixed_budget")
 
-    def report(self, module, *seeds: int, extra: tuple[str, ...] = ()) -> tuple[int, str, str, str]:
-        report_path = self.directory / f"{module.__name__}.md"
-        code, stdout, stderr = _run_main(module, [
-            "--run-root", str(self.runs),
-            "--manifest", str(self.manifest_path),
-            "--expected-seeds", *map(str, seeds),
-            "--report-out", str(report_path),
-            "--csv-out", str(self.directory / f"{module.__name__}.csv"),
-            *extra,
-        ])
-        return code, stdout, stderr, report_path.read_text() if report_path.is_file() else ""
-
     def test_each_discovery_sees_only_its_own_runner(self) -> None:
         self.write_step4()
         self.write_step5()
@@ -560,10 +570,13 @@ class AggregatorTests(unittest.TestCase):
         self.write_step5()
         code, stdout, stderr, report = self.report(step5_aggregator, 42)
         self.assertEqual(code, 0, stderr)
-        self.assertIn("plain: 3 runs | film: 3 runs | paired tests: 6", stdout)
-        self.assertTrue(report.startswith(f"# {step5_aggregator.REPORT_TITLE}\n"))
+        self.assertIn("Plain U-Net: 3 runs | Global FiLM: 3 runs | paired tests: 6", stdout)
+        self.assertTrue(report.startswith(
+            "# Step 5: Global FiLM against Plain U-Net, leave-one-domain-out\n"
+        ))
         self.assertIn("`aggregate_stage5_lodo.py`", report)
-        self.assertIn(f"Plain arm: `{PLAIN_ARM}`. FiLM arm: `{FILM_ARM}`.", report)
+        self.assertIn(f"Plain U-Net arm: `{PLAIN_ARM}`. Global FiLM arm: `{FILM_ARM}`.", report)
+        self.assertIn("| Δ (Global FiLM − Plain U-Net) |", report)
         self.assertIn("(1 seed)", report)
         for fold in self.folds:
             self.assertIn(f"| `{fold.held_out_domain.value}` | disc | {TEST} |", report)
@@ -581,9 +594,9 @@ class AggregatorTests(unittest.TestCase):
         self.write_step5()
         code, stdout, stderr, report = self.report(step4_aggregator, 42)
         self.assertEqual(code, 0, stderr)
-        self.assertIn("plain: 3 runs | film: 3 runs", stdout)
+        self.assertIn("Plain U-Net: 3 runs | Global FiLM: 3 runs", stdout)
         self.assertTrue(report.startswith(
-            "# Step 4: Global FiLM against the plain U-Net, fixed-budget leave-one-domain-out\n"
+            "# Step 4: Global FiLM against Plain U-Net, fixed-budget leave-one-domain-out\n"
         ))
         self.assertIn("`aggregate_stage4_film.py`", report)
         self.assertNotIn("stage5", report)
@@ -609,6 +622,111 @@ class AggregatorTests(unittest.TestCase):
         ])
         self.assertEqual(code, 2)
         self.assertIn("different manifest", stderr)
+
+
+SPATIAL_ARM = step5_aggregator.SPATIAL_FILM_ARM
+PARAMETERS = {PLAIN_ARM: 1_944_066, FILM_ARM: 2_611_170, SPATIAL_ARM: 4_667_042}
+
+
+class TwoConditionedArmsTests(_RunRoot, unittest.TestCase):
+    """SpFiLM joins the grid: against plain, and against Global FiLM with both diagnostics."""
+
+    def write_three_arms(self, seeds=(42,)) -> None:
+        for fold in self.folds:
+            for seed in seeds:
+                for arm, dice, kind in (
+                    (PLAIN_ARM, 0.80, "plain"),
+                    (FILM_ARM, 0.83, "global_film"),
+                    (SPATIAL_ARM, 0.85, "spatial_film"),
+                ):
+                    _write_run(self.runs, self.manifest_sha, fold, arm=arm, seed=seed, dice=dice,
+                               conditioned=kind != "plain", conditioning_arm=kind,
+                               parameter_count=PARAMETERS[arm])
+
+    def test_spfilm_against_global_film_shows_both_arms_diagnostics(self) -> None:
+        self.write_three_arms()
+        code, stdout, stderr, report = self.report(
+            step5_aggregator, 42, extra=("--arm-a", FILM_ARM, "--arm-b", SPATIAL_ARM)
+        )
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("Global FiLM: 3 runs | SpFiLM: 3 runs | paired tests: 6", stdout)
+        self.assertTrue(report.startswith("# Step 5: SpFiLM against Global FiLM, leave-one-domain-out\n"))
+        self.assertIn(
+            "| Global FiLM Dice, mean ± seed SD | SpFiLM Dice, mean ± seed SD | Δ (SpFiLM − Global FiLM) |",
+            report,
+        )
+        self.assertIn("(1 seed)", report)
+        self.assertIn("+0.0200", report)
+        self.assertIn(
+            f"Global FiLM arm: `{FILM_ARM}` (2,611,170 parameters). "
+            f"SpFiLM arm: `{SPATIAL_ARM}` (4,667,042 parameters).",
+            report,
+        )
+        diagnostics = report.split("## 2.")[1].split("## 3.")[0]
+        for fold in self.folds:
+            domain = fold.held_out_domain.value
+            arms = [
+                line.split(" | ")[1]
+                for line in diagnostics.splitlines()
+                if line.startswith(f"| `{domain}` | ")
+            ]
+            self.assertEqual(arms, ["Global FiLM", "SpFiLM"], domain)
+        with (self.directory / f"{step5_aggregator.__name__}.csv").open(newline="") as stream:
+            csv_rows = list(csv.DictReader(stream))
+        conditioning = [row for row in csv_rows if row["kind"] == "conditioning"]
+        self.assertEqual(
+            sorted((row["held_out_domain"], row["arm"]) for row in conditioning),
+            sorted((f.held_out_domain.value, arm) for f in self.folds for arm in (FILM_ARM, SPATIAL_ARM)),
+        )
+        tests = [row for row in csv_rows if row["kind"] == "paired_test"]
+        self.assertEqual({(row["arm_plain"], row["arm_film"]) for row in tests}, {(FILM_ARM, SPATIAL_ARM)})
+
+    def test_spfilm_against_plain_shows_only_the_conditioned_arm(self) -> None:
+        self.write_three_arms()
+        code, stdout, stderr, report = self.report(step5_aggregator, 42, extra=("--arm-b", SPATIAL_ARM))
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("Plain U-Net: 3 runs | SpFiLM: 3 runs | paired tests: 6", stdout)
+        self.assertTrue(report.startswith("# Step 5: SpFiLM against Plain U-Net, leave-one-domain-out\n"))
+        self.assertIn("+0.0500", report)
+        diagnostics = report.split("## 2.")[1].split("## 3.")[0]
+        self.assertEqual(diagnostics.count("| SpFiLM |"), len(self.folds))
+        self.assertNotIn("Global FiLM", diagnostics)
+        self.assertNotIn("Plain U-Net |", diagnostics)
+
+    def test_the_older_flag_spellings_are_aliases(self) -> None:
+        self.write_three_arms()
+        new = self.report(step5_aggregator, 42, extra=("--arm-a", FILM_ARM, "--arm-b", SPATIAL_ARM))
+        old = self.report(step5_aggregator, 42, extra=("--plain-arm", FILM_ARM, "--film-arm", SPATIAL_ARM))
+        self.assertEqual(new[0], 0, new[2])
+        self.assertEqual(new[1:], old[1:])
+
+    def test_the_same_arm_on_both_sides_is_refused(self) -> None:
+        self.write_three_arms()
+        code, _stdout, stderr, _report = self.report(
+            step5_aggregator, 42, extra=("--arm-a", SPATIAL_ARM, "--arm-b", SPATIAL_ARM)
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("both name", stderr)
+
+    def test_two_arms_of_one_kind_are_told_apart(self) -> None:
+        self.write_three_arms()
+        for fold in self.folds:
+            _write_run(self.runs, self.manifest_sha, fold, arm="spfilm_k16", seed=42, dice=0.86,
+                       conditioned=True, conditioning_arm="spatial_film", parameter_count=6_718_274)
+        code, stdout, stderr, report = self.report(
+            step5_aggregator, 42, extra=("--arm-a", SPATIAL_ARM, "--arm-b", "spfilm_k16")
+        )
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("SpFiLM (A): 3 runs | SpFiLM (B): 3 runs", stdout)
+        self.assertIn("| Δ (SpFiLM (B) − SpFiLM (A)) |", report)
+
+    def test_a_run_whose_label_contradicts_its_contents_is_refused(self) -> None:
+        fold = self.folds[0]
+        _write_run(self.runs, self.manifest_sha, fold, arm=SPATIAL_ARM, seed=42, dice=0.85,
+                   conditioned=True, conditioning_arm="plain")
+        code, _stdout, stderr, _report = self.report(step5_aggregator, 42, extra=("--arm-b", SPATIAL_ARM))
+        self.assertEqual(code, 2)
+        self.assertIn("carries conditioning block", stderr)
 
 
 @unittest.skipUnless(
@@ -662,7 +780,8 @@ class RunnerToAggregatorContractTests(unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         runs_per_arm = len(ACTIVE) * len(self.SEEDS)
         self.assertIn(
-            f"plain: {runs_per_arm} runs | film: {runs_per_arm} runs | paired tests: 6", stdout
+            f"Plain U-Net: {runs_per_arm} runs | Global FiLM: {runs_per_arm} runs | paired tests: 6",
+            stdout,
         )
         report = report_path.read_text()
         for domain in ACTIVE:
@@ -684,6 +803,62 @@ class RunnerToAggregatorContractTests(unittest.TestCase):
         ])
         self.assertEqual(code, 2)
         self.assertIn("No scientific runs", stderr)
+
+
+SPATIAL_CONFIG = CONFIGS / "stage5_lodo_spatial_film_k8_3dom.json"
+
+
+@unittest.skipUnless(
+    CONFIGS_PRESENT and SPATIAL_CONFIG.is_file() and REAL_MANIFEST.is_file() and DATASETS_PRESENT,
+    "configs, committed manifest, or datasets not present",
+)
+class SpatialRunnerToAggregatorContractTests(unittest.TestCase):
+    """The SpFiLM config through the real runner, then SpFiLM against Global FiLM from disk."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        film, spatial = _load(FILM_CONFIG), _load(SPATIAL_CONFIG)
+        manifest, _, records_by_key, manifest_path = runner._load_locked_runtime(film)
+        (PROJECT_ROOT / "artifacts").mkdir(exist_ok=True)
+        cls.out = Path(tempfile.mkdtemp(dir=PROJECT_ROOT / "artifacts"))
+        cls.calls: list = []
+        with mock.patch.object(runner, "run_experiment", _stub_engine(cls.calls, film_dice=0.82)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            for config, path in ((film, FILM_CONFIG), (spatial, SPATIAL_CONFIG)):
+                for held_out in ACTIVE:
+                    runner._run_one(
+                        config=config, config_path=path, manifest=manifest,
+                        records_by_key=records_by_key, manifest_path=manifest_path,
+                        held_out_domain=held_out, seed=42, smoke=False, requested_device="cpu",
+                        explicit_output=cls.out / f"{config.arm}_{held_out.value}_42",
+                    )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls.out, ignore_errors=True)
+
+    def test_the_spatial_arm_reaches_the_engine_with_its_rank_and_the_per_domain_rule(self) -> None:
+        spatial = [(config, kwargs) for config, kwargs in self.calls if config.arm == "spatial_film"]
+        self.assertEqual(len(spatial), len(ACTIVE))
+        for config, kwargs in spatial:
+            self.assertEqual((config.film_rank, config.film_fov_gating), (8, False))
+            self.assertEqual(config.test_conditioning, "nearest_domain")
+            self.assertEqual(len(kwargs["conditioning_reference"]), 40)
+
+    def test_the_aggregator_reads_both_conditioned_arms(self) -> None:
+        csv_path = self.out / "cells.csv"
+        code, stdout, stderr = _run_main(step5_aggregator, [
+            "--run-root", str(self.out), "--manifest", str(REAL_MANIFEST), "--expected-seeds", "42",
+            "--arm-a", FILM_ARM, "--arm-b", step5_aggregator.SPATIAL_FILM_ARM, "--csv-out", str(csv_path),
+        ])
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("Global FiLM: 3 runs | SpFiLM: 3 runs | paired tests: 6", stdout)
+        with csv_path.open(newline="") as stream:
+            rows = [row for row in csv.DictReader(stream) if row["kind"] == "conditioning"]
+        self.assertEqual(
+            sorted((row["held_out_domain"], row["arm"]) for row in rows),
+            sorted((d.value, arm) for d in ACTIVE for arm in (FILM_ARM, step5_aggregator.SPATIAL_FILM_ARM)),
+        )
 
 
 if __name__ == "__main__":

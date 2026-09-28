@@ -103,6 +103,10 @@ class FixedRun:
     metrics_path: Path
     per_image_csv: Path
     stored: Mapping[str, Any]
+    # What kind of network the arm is, as the runner recorded it (runs from
+    # before conditioning existed are plain), and its size.
+    conditioning_arm: str = "plain"
+    parameter_count: int | None = None
 
     @property
     def label(self) -> str:
@@ -117,6 +121,87 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise FixedLodoReportError(f"{path} must hold a JSON object")
     return payload
+
+
+def _parameter_count(payload: Mapping[str, Any], context: str) -> int | None:
+    value = payload.get("parameter_count")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise FixedLodoReportError(f"{context} has an invalid parameter_count {value!r}")
+    return value
+
+
+# Report names for the conditioning arms, keyed by the ``conditioning_arm`` a
+# run records: reports label arms from the runs, never from command-line flags.
+CONDITIONING_ARM_LABELS = {
+    "plain": "Plain U-Net",
+    "global_film": "Global FiLM",
+    "spatial_film": "SpFiLM",
+}
+
+
+@dataclass(frozen=True)
+class ArmIdentity:
+    """How a two-arm report names one arm: experiment, label and size."""
+
+    arm: str
+    conditioning_arm: str
+    label: str
+    parameter_count: int | None
+
+    @property
+    def conditioned(self) -> bool:
+        return self.conditioning_arm != "plain"
+
+    def describe(self) -> str:
+        size = (
+            ""
+            if self.parameter_count is None
+            else f" ({self.parameter_count:,} parameters)"
+        )
+        return f"{self.label} arm: `{self.arm}`{size}."
+
+
+def _one_arm_identity(runs: Sequence[Any]) -> tuple[str, str, int | None]:
+    arms = {run.arm for run in runs}
+    kinds = {run.conditioning_arm for run in runs}
+    sizes = {run.parameter_count for run in runs}
+    if len(arms) != 1 or len(kinds) != 1:
+        raise FixedLodoReportError(
+            f"One arm's runs disagree on what they are: arms {sorted(arms)}, "
+            f"conditioning {sorted(kinds)}"
+        )
+    if len(sizes) != 1:
+        # One experiment name, two network sizes: configs were mixed under it.
+        raise FixedLodoReportError(
+            f"{next(iter(arms))}: runs disagree on the parameter count "
+            f"{sorted(str(size) for size in sizes)}"
+        )
+    return next(iter(arms)), next(iter(kinds)), next(iter(sizes))
+
+
+def arm_identities(
+    runs_a: Sequence[Any], runs_b: Sequence[Any]
+) -> tuple[ArmIdentity, ArmIdentity]:
+    """Name both arms from what their runs recorded.
+
+    Two arms of the same kind (two SpFiLM ranks, say) would share a label, so
+    they are told apart as (A) and (B); the experiment names say which is which.
+    """
+
+    (arm_a, kind_a, size_a), (arm_b, kind_b, size_b) = (
+        _one_arm_identity(runs_a),
+        _one_arm_identity(runs_b),
+    )
+    label_a = CONDITIONING_ARM_LABELS.get(kind_a, kind_a)
+    label_b = CONDITIONING_ARM_LABELS.get(kind_b, kind_b)
+    if label_a == label_b:
+        label_a, label_b = f"{label_a} (A)", f"{label_b} (B)"
+    return (
+        ArmIdentity(arm_a, kind_a, label_a, size_a),
+        ArmIdentity(arm_b, kind_b, label_b, size_b),
+    )
 
 
 def build_fixed_run(
@@ -150,6 +235,16 @@ def build_fixed_run(
     csv_path = metrics_path.parent / FIXED_PER_IMAGE_CSV
     if not csv_path.is_file():
         raise FixedLodoReportError(f"{context} is missing {FIXED_PER_IMAGE_CSV}")
+    conditioning_arm = str(metadata.get("conditioning_arm", "plain"))
+    # Runs from before conditioning existed record no conditioning_arm and are
+    # plain. A run whose label and contents disagree would be reported under
+    # the wrong name, or lose its diagnostics, so it is refused.
+    if (conditioning_arm == "plain") == isinstance(payload.get("conditioning"), dict):
+        raise FixedLodoReportError(
+            f"{context} records conditioning_arm {conditioning_arm!r} but "
+            + ("carries" if conditioning_arm == "plain" else "has no")
+            + " conditioning block"
+        )
     budget = metadata.get("budget") or {}
     return FixedRun(
         arm=str(metadata["arm"]),
@@ -167,6 +262,8 @@ def build_fixed_run(
         metrics_path=metrics_path,
         per_image_csv=csv_path,
         stored=test,
+        conditioning_arm=conditioning_arm,
+        parameter_count=_parameter_count(payload, context),
     )
 
 

@@ -65,11 +65,15 @@ class Stage3SingleSourceConfig:
     # Conditioning arm and its settings; the plain arm carries the defaults and
     # ignores them. ``paired_arm`` names the experiment this arm is paired with
     # for the per-image significance test (same manifest, same test images).
+    # ``film_rank`` / ``film_fov_gating`` are the spatial term, set only by the
+    # spatial_film arm; 0 / False mean "none".
     arm: str = "plain"
     film_levels: int = ConditionedUNet.ENCODER_LEVELS
     film_embedding_dim: int = 64
     film_hidden_dim: int = 256
     film_clamp: float = 5.0
+    film_rank: int = 0
+    film_fov_gating: bool = False
     test_conditioning: str = "nearest_domain"
     paired_arm: str | None = None
 
@@ -340,6 +344,8 @@ class Stage3SingleSourceConfig:
             film_embedding_dim=self.film_embedding_dim,
             film_hidden_dim=self.film_hidden_dim,
             film_clamp=self.film_clamp,
+            film_rank=self.film_rank,
+            film_fov_gating=self.film_fov_gating,
             test_conditioning=self.test_conditioning,
         )
 
@@ -349,27 +355,43 @@ FILM_BLOCK_DEFAULTS: dict[str, Any] = {
     "film_embedding_dim": 64,
     "film_hidden_dim": 256,
     "film_clamp": 5.0,
+    "film_rank": 0,
+    "film_fov_gating": False,
     "test_conditioning": "nearest_domain",
 }
+SPATIAL_FILM_KEYS = ("rank", "fov_gating")
 
 
 def _parse_film_block(raw: object, arm: str) -> dict[str, Any]:
     """Read the optional ``film`` block; the plain arm must not carry one.
 
     Keys are the config-file spellings (``levels``, ``embedding_dim``,
-    ``hidden_dim``, ``clamp``, ``test_conditioning``); missing keys take the
-    draft's defaults so a config only states what it changes.
+    ``hidden_dim``, ``clamp``, ``test_conditioning``, and for the spatial arm
+    ``rank`` and ``fov_gating``); missing keys take the draft's defaults so a
+    config only states what it changes. The spatial arm must state its rank:
+    K is the experiment's main setting, and K = 0 is Global FiLM, which has
+    its own arm (the equivalence is a unit test, not a run).
     """
 
     if raw is None:
+        if arm == "spatial_film":
+            raise Stage3ConfigError("The spatial_film arm needs a film block with film.rank")
         return dict(FILM_BLOCK_DEFAULTS)
     if arm == "plain":
         raise Stage3ConfigError("The plain arm must not carry a film block")
     block = _mapping(raw, "film")
-    allowed = {"levels", "embedding_dim", "hidden_dim", "clamp", "test_conditioning"}
+    allowed = {
+        "levels", "embedding_dim", "hidden_dim", "clamp", "test_conditioning", *SPATIAL_FILM_KEYS
+    }
     unknown = sorted(set(block) - allowed)
     if unknown:
         raise Stage3ConfigError(f"film has unknown keys {unknown}")
+    spatial = [key for key in SPATIAL_FILM_KEYS if key in block]
+    if spatial and arm != "spatial_film":
+        raise Stage3ConfigError(
+            f"film.{spatial[0]} is set, but the {arm} arm has no spatial term; "
+            "rank and fov_gating belong to spatial_film"
+        )
     values = dict(FILM_BLOCK_DEFAULTS)
     if "levels" in block:
         levels = _positive_int(block, "levels")
@@ -392,6 +414,18 @@ def _parse_film_block(raw: object, arm: str) -> dict[str, Any]:
                 f"{list(TEST_CONDITIONING_POLICIES)}, got {policy!r}"
             )
         values["test_conditioning"] = policy
+    if arm == "spatial_film":
+        if "rank" not in block:
+            raise Stage3ConfigError("film.rank is required for the spatial_film arm")
+        if _is_int(block["rank"]) and block["rank"] == 0:
+            raise Stage3ConfigError(
+                "film.rank 0 has no spatial term and is Global FiLM; use the global_film arm"
+            )
+        values["film_rank"] = _positive_int(block, "rank")
+        if "fov_gating" in block:
+            if not isinstance(block["fov_gating"], bool):
+                raise Stage3ConfigError("film.fov_gating must be true or false")
+            values["film_fov_gating"] = block["fov_gating"]
     return values
 
 

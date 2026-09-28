@@ -3,13 +3,19 @@
 What is pinned: the fold pools every active domain's budgeted train/val and
 keeps each domain's test partition separate and identical to the LODO arms';
 the inactive domain never appears; the FiLM arm must use oracle codes; the two
-configs differ only in the arm; and the aggregator pairs FiLM against plain
-per domain and reduces the fixed-code sweep to the wrong-code penalty.
+configs differ only in the arm; and the aggregator pairs two arms per domain
+and reduces each conditioned arm's sweep to its wrong-signal penalty. With
+SpFiLM in the grid both arms can be conditioned, so labels come from the runs
+and each conditioned arm gets its own penalty rows; one seed per arm is a first
+look, not a failure.
 """
 
 from __future__ import annotations
 
+import contextlib
 import csv
+import hashlib
+import io
 import json
 import shutil
 import sys
@@ -36,7 +42,7 @@ from spfilm.all_domains import (  # noqa: E402
 )
 from spfilm.data import FundusRecord  # noqa: E402
 from spfilm.lodo import Domain, DomainPartitions, SampleKey  # noqa: E402
-from spfilm.single_source import SingleSourceManifest  # noqa: E402
+from spfilm.single_source import SingleSourceManifest, write_single_source_manifest  # noqa: E402
 from spfilm.stage3 import Stage3ConfigError  # noqa: E402
 from spfilm.stage3_single_source import Stage3SingleSourceConfig  # noqa: E402
 
@@ -180,7 +186,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(set(lodo["protocol"]["held_out_domains"]), set(this["protocol"]["active_domains"]))
 
 
-def _write_run(base: Path, arm: str, conditioning_arm: str, seed: int, dice: dict[str, float]) -> Path:
+def _write_run(
+    base: Path,
+    arm: str,
+    conditioning_arm: str,
+    seed: int,
+    dice: dict[str, float],
+    parameter_count: int | None = None,
+) -> Path:
     run = base / f"{arm}_seed_{seed}"
     run.mkdir(parents=True, exist_ok=True)
     active = [d.value for d in sorted(ACTIVE, key=lambda d: d.value)]
@@ -196,7 +209,7 @@ def _write_run(base: Path, arm: str, conditioning_arm: str, seed: int, dice: dic
             writer.writeheader(); writer.writerows(rows)
         block: dict = {s: {"dice_mean": dice[domain] + 0.001} for s in ("disc", "cup")}
         block["evaluated_sample_count"] = TEST
-        if conditioning_arm == "global_film":
+        if conditioning_arm != "plain":
             block["conditioning"] = {"fixed_code_sweep": {
                 code: {s: {"dice_mean": dice[domain] + 0.001 - (0.0 if code == domain else 0.05)}
                        for s in ("disc", "cup")}
@@ -204,6 +217,7 @@ def _write_run(base: Path, arm: str, conditioning_arm: str, seed: int, dice: dic
             }}
         test_by_domain[domain] = block
     (run / "test_metrics.json").write_text(json.dumps({
+        "parameter_count": parameter_count,
         "test_by_domain": test_by_domain,
         "all_domains": {
             "protocol": "all_domains_fixed_budget", "arm": arm, "conditioning_arm": conditioning_arm,
@@ -261,6 +275,122 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual({(c.domain.value, c.structure) for c in cells},
                          {(d.value, s) for d in ACTIVE for s in ("disc", "cup")})
         self.assertTrue(all(c.test_image_count == TEST for c in cells))
+
+
+
+class MainTests(unittest.TestCase):
+    """The report end to end: one seed per arm, and SpFiLM against both comparators."""
+
+    PARAMETERS = {"plain": 1_944_066, "film": 2_611_170, "spfilm": 4_667_042}
+
+    def setUp(self) -> None:
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.directory, True)
+        self.runs = self.directory / "runs"
+        manifest = _manifest()
+        self.manifest_path = self.directory / "single_source_manifest.json"
+        write_single_source_manifest(manifest, self.manifest_path)
+        self.manifest_sha = hashlib.sha256(self.manifest_path.read_bytes()).hexdigest()
+
+    def write(self, seeds=(42,)) -> None:
+        base = {"drishti_gs": 0.70, "refuge_canon_val": 0.80, "refuge_zeiss": 0.75}
+        for seed in seeds:
+            for arm, kind, lift in (("plain", "plain", 0.0), ("film", "global_film", 0.03),
+                                    ("spfilm", "spatial_film", 0.05)):
+                run = _write_run(self.runs, arm, kind, seed, {k: v + lift for k, v in base.items()},
+                                 parameter_count=self.PARAMETERS[arm])
+                metrics = json.loads((run / "test_metrics.json").read_text())
+                metrics["all_domains"]["manifest_sha256"] = self.manifest_sha
+                (run / "test_metrics.json").write_text(json.dumps(metrics))
+
+    def main(self, *extra: str, seeds=(42,)) -> tuple[int, str, str, str, list[dict]]:
+        report, cells = self.directory / "report.md", self.directory / "cells.csv"
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = agg.main([
+                "--run-root", str(self.runs), "--manifest", str(self.manifest_path),
+                "--expected-seeds", *map(str, seeds),
+                "--report-out", str(report), "--csv-out", str(cells), *extra,
+            ])
+        rows = list(csv.DictReader(cells.open(newline=""))) if cells.is_file() else []
+        text = report.read_text() if report.is_file() else ""
+        return code, stdout.getvalue(), stderr.getvalue(), text, rows
+
+    def test_one_seed_per_arm_is_a_first_look_not_a_failure(self) -> None:
+        self.write()
+        code, stdout, stderr, report, _rows = self.main("--arm-a", "plain", "--arm-b", "film")
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("Plain U-Net: 1 runs | Global FiLM: 1 runs | paired tests: 6", stdout)
+        self.assertIn("(1 seed)", report)
+        self.assertNotIn("± nan", report)
+
+    def test_two_seeds_report_the_seed_spread(self) -> None:
+        self.write(seeds=(42, 43))
+        code, _stdout, stderr, report, _rows = self.main("--arm-a", "plain", "--arm-b", "film", seeds=(42, 43))
+        self.assertEqual(code, 0, stderr)
+        self.assertNotIn("(1 seed)", report)
+        self.assertIn(" ± ", report)
+
+    def test_spfilm_against_global_film_has_a_penalty_row_per_arm(self) -> None:
+        self.write()
+        code, stdout, stderr, report, rows = self.main("--arm-a", "film", "--arm-b", "spfilm")
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("Global FiLM: 1 runs | SpFiLM: 1 runs | paired tests: 6", stdout)
+        self.assertTrue(report.startswith(
+            "# Step 4: train on all domains, test on each — SpFiLM against Global FiLM\n"
+        ))
+        self.assertIn("| Δ (SpFiLM − Global FiLM) |", report)
+        self.assertIn(
+            "Global FiLM arm: `film` (2,611,170 parameters). SpFiLM arm: `spfilm` (4,667,042 parameters).",
+            report,
+        )
+        penalty = report.split("## 3.")[1].split("## 4.")[0]
+        for domain in ACTIVE:
+            for structure in ("disc", "cup"):
+                arms = [
+                    line.split(" | ")[2]
+                    for line in penalty.splitlines()
+                    if line.startswith(f"| `{domain.value}` | {structure} | ")
+                ]
+                self.assertEqual(arms, ["Global FiLM", "SpFiLM"], f"{domain.value} {structure}")
+        penalties = [row for row in rows if row["kind"] == "wrong_code_penalty"]
+        self.assertEqual(len(penalties), 2 * len(ACTIVE) * 2)
+        self.assertEqual({row["arm"] for row in penalties}, {"film", "spfilm"})
+        for row in penalties:
+            self.assertAlmostEqual(float(row["penalty_own_minus_worst"]), 0.05, places=6)
+
+    def test_spfilm_against_plain_has_only_its_own_penalty(self) -> None:
+        self.write()
+        code, stdout, stderr, report, rows = self.main("--arm-a", "plain", "--arm-b", "spfilm")
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("Plain U-Net: 1 runs | SpFiLM: 1 runs | paired tests: 6", stdout)
+        penalty = report.split("## 3.")[1].split("## 4.")[0]
+        self.assertEqual(penalty.count("| SpFiLM |"), len(ACTIVE) * 2)
+        self.assertNotIn("Plain U-Net |", penalty)
+        self.assertEqual({row["arm"] for row in rows if row["kind"] == "wrong_code_penalty"}, {"spfilm"})
+
+    def test_the_older_flag_spellings_are_aliases(self) -> None:
+        self.write()
+        new = self.main("--arm-a", "film", "--arm-b", "spfilm")
+        old = self.main("--plain-arm", "film", "--film-arm", "spfilm")
+        self.assertEqual(new[0], 0, new[2])
+        self.assertEqual(new[1:], old[1:])
+
+    def test_the_same_arm_on_both_sides_is_refused(self) -> None:
+        self.write()
+        code, _stdout, stderr, _report, _rows = self.main("--arm-a", "spfilm", "--arm-b", "spfilm")
+        self.assertEqual(code, 2)
+        self.assertIn("both name", stderr)
+
+    def test_a_run_whose_label_contradicts_its_contents_is_refused(self) -> None:
+        _write_run(self.runs, "film", "plain", 42, {d.value: 0.8 for d in ACTIVE})
+        run = self.runs / "film_seed_42"
+        metrics = json.loads((run / "test_metrics.json").read_text())
+        for block in metrics["test_by_domain"].values():
+            block["conditioning"] = {"fixed_code_sweep": {}}
+        (run / "test_metrics.json").write_text(json.dumps(metrics))
+        with self.assertRaises(agg.FixedLodoReportError):
+            agg.discover_runs([self.runs])
 
 
 if __name__ == "__main__":

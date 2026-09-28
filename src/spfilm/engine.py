@@ -114,7 +114,8 @@ class Stage2Config:
     requested_device: str = "auto"
     rim_manifest: str | None = None
     # Conditioning arm. "plain" is the Stage 2/3 backbone with no conditioning;
-    # "global_film" adds channel-wise FiLM after each encoder block (Step 4).
+    # "global_film" adds channel-wise FiLM after each encoder block (Step 4);
+    # "spatial_film" lets that modulation vary over pixels (Step 5).
     # The film_* fields are ignored by the plain arm and, so that in-flight plain
     # runs keep resuming, are left out of the plain resume fingerprint.
     arm: str = "plain"
@@ -122,6 +123,11 @@ class Stage2Config:
     film_embedding_dim: int = 64
     film_hidden_dim: int = 256
     film_clamp: float = 5.0
+    # The spatial term: rank K of the basis maps and optional field-of-view
+    # gating. 0 / False mean "no spatial term", which is literally true of every
+    # other arm; Global FiLM's resume fingerprint leaves both out.
+    film_rank: int = 0
+    film_fov_gating: bool = False
     # How held-out test images get a domain code. "nearest_domain": one code
     # for the whole held-out domain, the source domain whose training centroid
     # is nearest to the held-out domain's unlabelled reference sample (the
@@ -144,7 +150,11 @@ FILM_CONFIG_FIELDS = (
     "film_hidden_dim",
     "film_clamp",
     "test_conditioning",
+    "film_rank",
+    "film_fov_gating",
 )
+# Added for Step 5, after Global FiLM runs had been launched.
+SPATIAL_FILM_CONFIG_FIELDS = ("film_rank", "film_fov_gating")
 TEST_CONDITIONING_POLICIES = tuple(SELECTION_POLICIES)
 
 
@@ -297,12 +307,16 @@ def _resume_fingerprint(config: Stage2Config, split_counts: dict[str, int]) -> s
 
     The plain arm's fingerprint is computed exactly as before the conditioning
     fields existed, so a plain run preempted under the old code resumes under
-    the new. A conditioned arm hashes every field.
+    the new. Global FiLM's is computed exactly as before the spatial fields
+    existed, for the same reason. The spatial arm hashes every field.
     """
 
     config_payload = asdict(config)
     if config.arm == "plain":
         for field in FILM_CONFIG_FIELDS:
+            config_payload.pop(field, None)
+    elif config.arm == "global_film":
+        for field in SPATIAL_FILM_CONFIG_FIELDS:
             config_payload.pop(field, None)
     payload = json.dumps(
         {"config": config_payload, "split_counts": split_counts}, sort_keys=True
@@ -1099,6 +1113,8 @@ def _conditioning_report(
             "embedding_dim": config.film_embedding_dim,
             "hidden_dim": config.film_hidden_dim,
             "clamp": config.film_clamp,
+            "rank": config.film_rank,
+            "fov_gating": config.film_fov_gating,
         },
         "selector": {
             "path": str(output_dir / "domain_selector.json"),
@@ -1289,7 +1305,7 @@ def run_experiment(
         print(
             f"conditioning | arm={config.arm} | codes={list(vocabulary.domains)} | "
             f"train/val=oracle | test={config.test_conditioning} | "
-            f"film_levels={config.film_levels}",
+            f"film_levels={config.film_levels} | rank={config.film_rank}",
             flush=True,
         )
         if domain_decision is not None:
@@ -1312,6 +1328,8 @@ def run_experiment(
         embedding_dim=config.film_embedding_dim,
         hidden_dim=config.film_hidden_dim,
         clamp=config.film_clamp,
+        rank=config.film_rank,
+        fov_gating=config.film_fov_gating,
     ).to(device)
     criterion = BCEDiceLoss()
     optimizer = torch.optim.Adam(

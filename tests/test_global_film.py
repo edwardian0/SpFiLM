@@ -638,7 +638,7 @@ class Stage4ConfigTests(unittest.TestCase):
 
     def test_unknown_arm_is_refused(self) -> None:
         payload = json.loads(FILM_CONFIG.read_text())
-        payload["arm"] = "spatial_film"
+        payload["arm"] = "spatial"
         with self.assertRaises(Stage3ConfigError):
             _load(_write_temp_config(payload))
 
@@ -797,6 +797,7 @@ def _write_lodo_run(
         "test": {"evaluated_sample_count": len(fold.test)},
         "fixed_lodo": {
             "protocol": "leave_one_domain_out_fixed_budget", "arm": arm,
+            "conditioning_arm": "global_film" if arm == FILM_ARM else "plain",
             "held_out_domain": held_out.value, "source_domains": sources, "run_seed": seed,
             "budget": {"train": 4, "val": 2, "test": 3, "subsample_seed": 42},
             "manifest_sha256": manifest_sha,

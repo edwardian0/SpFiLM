@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Aggregate the train-on-all arms: FiLM next to plain, per domain, plus the wrong-code penalty.
+"""Aggregate the train-on-all arms: two arms per domain, plus each conditioned arm's wrong-signal penalty.
 
 One model per seed is trained on all three active domains and scored on each
-domain's own 50 test images (plain arm: no codes; FiLM arm: the domain's own
-code). This puts the two arms side by side per domain, runs the brief's paired
-test on per-image Dice with seeds averaged first (FiLM minus plain, so a positive
-difference reads "FiLM helped"), and reduces the FiLM runs' fixed-code sweeps
-into the wrong-code penalty: how much Dice the FiLM model loses when a test
-image is given another domain's code. A penalty near zero means the network
-ignores the code; a clear penalty means it uses it, which is the precondition
-for any conditioning result to mean anything.
+domain's own 50 test images (plain arm: no conditioning signal; a conditioned
+arm, Global FiLM or SpFiLM: the domain's own signal). This puts two arms side
+by side per domain, runs the brief's paired test on per-image Dice with seeds
+averaged first (arm B minus arm A, so a positive difference reads "B helped"),
+and reduces every conditioned arm's sweep into the wrong-signal penalty: how
+much Dice the model loses when a test image is given another domain's signal.
+A penalty near zero means the network ignores the signal; a clear penalty
+means it uses it, which is the precondition for any conditioning result to
+mean anything. Arms are labelled from what their runs recorded, and a single
+seed per arm is accepted so seed 42 can be read before the rest are launched.
 
 Reuses the fixed-budget aggregator's statistics; only run discovery and the
 sweep reduction are new.
@@ -40,17 +42,23 @@ import numpy as np  # noqa: E402
 from aggregate_stage3_1_3 import SeedInterval, seed_confidence_interval  # noqa: E402
 from aggregate_stage3_fixed import (  # noqa: E402
     ALPHA,
+    CONDITIONING_ARM_LABELS,
     DEFAULT_EXPECTED_SEEDS,
     DEFAULT_MANIFEST,
     DEFAULT_RUN_ROOTS,
     PAIRED_METHODS,
+    ArmIdentity,
     FixedLodoReportError,
     PairedResult,
     Substrate,
     _accumulate,
+    _parameter_count,
     _sha256,
+    _single_seed_interval,
+    arm_identities,
     paired_tests,
 )
+from aggregate_stage4_film import add_arm_arguments  # noqa: E402
 from spfilm.all_domains import ALL_DOMAINS_PROTOCOL_NAME, compose_all_domains_fold  # noqa: E402
 from spfilm.lodo import Domain  # noqa: E402
 from spfilm.metrics import CHANNEL_NAMES, read_per_image_csv  # noqa: E402
@@ -60,6 +68,9 @@ from spfilm.single_source import load_single_source_manifest  # noqa: E402
 TEST_METRICS_NAME = "test_metrics.json"
 DEFAULT_PLAIN_ARM = "stage4_all_domains_fixed_budget_plain_unet_3dom"
 DEFAULT_FILM_ARM = "stage4_all_domains_fixed_budget_global_film_3dom"
+SPATIAL_FILM_ARM = "stage4_all_domains_fixed_budget_spatial_film_k8_3dom"
+# Filled with the arms' labels, e.g. "SpFiLM against Global FiLM".
+REPORT_TITLE = "Step 4: train on all domains, test on each — {arm_b} against {arm_a}"
 
 
 # --------------------------------------------------------------------------
@@ -82,6 +93,7 @@ class AllDomainsRun:
     metrics_path: Path
     per_image_csv: Mapping[Domain, Path]
     test_by_domain: Mapping[str, Any]
+    parameter_count: int | None = None
 
     @property
     def label(self) -> str:
@@ -117,10 +129,23 @@ def build_run(metrics_path: Path) -> AllDomainsRun | None:
         if not csv_path.is_file():
             raise FixedLodoReportError(f"{metrics_path} is missing {csv_path.name}")
         per_image[Domain(domain)] = csv_path
+    conditioning_arm = str(metadata.get("conditioning_arm", "plain"))
+    # A conditioned run carries a conditioning block (with its sweep) for every
+    # test domain and a plain run none; a run whose label says otherwise would
+    # be reported under the wrong name, or lose its penalty, so it is refused.
+    conditioned_blocks = sum(
+        isinstance(block, dict) and isinstance(block.get("conditioning"), dict)
+        for block in test_by_domain.values()
+    )
+    if conditioned_blocks != (0 if conditioning_arm == "plain" else len(test_by_domain)):
+        raise FixedLodoReportError(
+            f"{metrics_path} records conditioning_arm {conditioning_arm!r} but its "
+            "test_by_domain conditioning blocks say otherwise"
+        )
     budget = metadata.get("budget") or {}
     return AllDomainsRun(
         arm=str(metadata["arm"]),
-        conditioning_arm=str(metadata.get("conditioning_arm", "plain")),
+        conditioning_arm=conditioning_arm,
         run_seed=int(metadata["run_seed"]),
         active_domains=active,
         manifest_sha256=str(metadata["manifest_sha256"]),
@@ -132,6 +157,7 @@ def build_run(metrics_path: Path) -> AllDomainsRun | None:
         metrics_path=metrics_path,
         per_image_csv=per_image,
         test_by_domain=test_by_domain,
+        parameter_count=_parameter_count(payload, str(metrics_path)),
     )
 
 
@@ -208,7 +234,15 @@ class DomainCell:
     intervals: Mapping[str, SeedInterval]
 
 
-def build_cells(runs: Sequence[AllDomainsRun]) -> tuple[DomainCell, ...]:
+def build_cells(
+    runs: Sequence[AllDomainsRun], allow_single_seed: bool = False
+) -> tuple[DomainCell, ...]:
+    """Reduce each domain and structure over the arm's seeds.
+
+    ``allow_single_seed`` lets one seed through for the first look at a new
+    arm: the cell holds that seed's mean with a NaN spread, shown "(1 seed)".
+    """
+
     cells: list[DomainCell] = []
     arm = runs[0].arm
     seeds = [r.run_seed for r in runs]
@@ -235,15 +269,19 @@ def build_cells(runs: Sequence[AllDomainsRun]) -> tuple[DomainCell, ...]:
                 series = [s[metric] for s in summaries]
                 if any(v is None for v in series):
                     continue
-                intervals[metric] = seed_confidence_interval(metric, seeds, series)
+                intervals[metric] = (
+                    _single_seed_interval(metric, seeds, series)
+                    if allow_single_seed and len(seeds) == 1
+                    else seed_confidence_interval(metric, seeds, series)
+                )
             cells.append(DomainCell(arm, domain, structure, next(iter(counts)), intervals))
     return tuple(cells)
 
 
-def build_substrate(plain: Sequence[AllDomainsRun], film: Sequence[AllDomainsRun]) -> Substrate:
+def build_substrate(runs_a: Sequence[AllDomainsRun], runs_b: Sequence[AllDomainsRun]) -> Substrate:
     store: dict[tuple[str, Domain, str, str], dict[str, list[float]]] = {}
     seeds: dict[tuple[str, Domain], set[int]] = {}
-    for run in (*plain, *film):
+    for run in (*runs_a, *runs_b):
         for domain, csv_path in run.per_image_csv.items():
             _accumulate(store, seeds, run.arm, domain, run.run_seed, csv_path)
     values: dict[tuple[str, Domain, str, str], Mapping[str, float]] = {}
@@ -260,7 +298,7 @@ def build_substrate(plain: Sequence[AllDomainsRun], film: Sequence[AllDomainsRun
 
 
 # --------------------------------------------------------------------------
-# Stage C: the wrong-code penalty from the FiLM runs' sweeps
+# Stage C: the wrong-signal penalty from each conditioned arm's sweep
 # --------------------------------------------------------------------------
 
 
@@ -272,23 +310,34 @@ class PenaltyCell:
     own_code_dice: float  # mean over seeds
     best_other_code_dice: float
     worst_other_code_dice: float
-    own_code_was_best: int  # seeds where the domain's own code scored highest
+    own_code_was_best: int  # seeds where the domain's own signal scored highest
     sweep_by_code: Mapping[str, float]  # mean over seeds
+    arm: str = ""  # experiment name
+    label: str = ""  # report label, e.g. "SpFiLM"
 
 
-def build_penalty_cells(film: Sequence[AllDomainsRun]) -> tuple[PenaltyCell, ...]:
+def build_penalty_cells(
+    runs: Sequence[AllDomainsRun], label: str | None = None
+) -> tuple[PenaltyCell, ...]:
+    """One conditioned arm's penalty per domain; ``label`` defaults to the arm's kind."""
+
+    if label is None:
+        kind = runs[0].conditioning_arm
+        label = CONDITIONING_ARM_LABELS.get(kind, kind)
     cells: list[PenaltyCell] = []
-    domains = sorted({Domain(d) for r in film for d in r.active_domains}, key=lambda d: d.value)
+    domains = sorted({Domain(d) for r in runs for d in r.active_domains}, key=lambda d: d.value)
     for domain in domains:
         for structure in CHANNEL_NAMES:
             own, best_other, worst_other, wins = [], [], [], 0
             by_code: dict[str, list[float]] = {}
-            for run in film:
+            for run in runs:
                 block = run.test_by_domain[domain.value]
                 conditioning = block.get("conditioning") or {}
                 sweep = conditioning.get("fixed_code_sweep")
                 if not sweep:
-                    raise FixedLodoReportError(f"{run.label} {domain.value}: no fixed-code sweep recorded")
+                    raise FixedLodoReportError(
+                        f"{run.label} {domain.value}: no sweep over conditioning signals recorded"
+                    )
                 scores = {code: float(entry[structure]["dice_mean"]) for code, entry in sweep.items()}
                 for code, value in scores.items():
                     by_code.setdefault(code, []).append(value)
@@ -300,13 +349,27 @@ def build_penalty_cells(film: Sequence[AllDomainsRun]) -> tuple[PenaltyCell, ...
                 wins += int(own_dice >= max(scores.values()) - 1e-9)
             cells.append(PenaltyCell(
                 domain=domain, structure=structure,
-                seeds=tuple(r.run_seed for r in film),
+                seeds=tuple(r.run_seed for r in runs),
                 own_code_dice=float(np.mean(own)),
                 best_other_code_dice=float(np.mean(best_other)),
                 worst_other_code_dice=float(np.mean(worst_other)),
                 own_code_was_best=wins,
                 sweep_by_code={c: float(np.mean(v)) for c, v in sorted(by_code.items())},
+                arm=runs[0].arm,
+                label=label,
             ))
+    return tuple(cells)
+
+
+def penalty_cells_for_arms(
+    *arms: tuple[Sequence[AllDomainsRun], ArmIdentity],
+) -> tuple[PenaltyCell, ...]:
+    """Penalties for every conditioned arm of a comparison, in arm order."""
+
+    cells: list[PenaltyCell] = []
+    for runs, identity in arms:
+        if identity.conditioned:
+            cells.extend(build_penalty_cells(runs, identity.label))
     return tuple(cells)
 
 
@@ -319,68 +382,78 @@ def _fmt(cell: DomainCell | None) -> str:
     if cell is None or "dice" not in cell.intervals:
         return "—"
     d = cell.intervals["dice"]
+    if len(d.seeds) < 2:
+        return f"{d.mean:.4f} (1 seed)"
     return f"{d.mean:.4f} ± {d.std:.4f}"
 
 
 def render_side_by_side(
-    plain_cells: Sequence[DomainCell], film_cells: Sequence[DomainCell],
-    results: Sequence[PairedResult], plain_arm: str, film_arm: str,
+    cells_a: Sequence[DomainCell], cells_b: Sequence[DomainCell],
+    results: Sequence[PairedResult], arm_a: ArmIdentity, arm_b: ArmIdentity,
 ) -> str:
-    plain = {(c.domain, c.structure): c for c in plain_cells}
-    film = {(c.domain, c.structure): c for c in film_cells}
+    index_a = {(c.domain, c.structure): c for c in cells_a}
+    index_b = {(c.domain, c.structure): c for c in cells_b}
     tests = {(r.held_out_domain, r.structure): r for r in results}
     lines = [
-        "| Test domain | Structure | Images | Plain Dice, mean ± seed SD | FiLM Dice, mean ± seed SD | "
-        "Δ (FiLM − plain) | p | p (Holm) | Significant |",
+        f"| Test domain | Structure | Images | {arm_a.label} Dice, mean ± seed SD | "
+        f"{arm_b.label} Dice, mean ± seed SD | Δ ({arm_b.label} − {arm_a.label}) | p | "
+        "p (Holm) | Significant |",
         "|---|---|---:|---:|---:|---:|---:|---:|:---:|",
     ]
-    for domain in sorted({k[0] for k in plain} | {k[0] for k in film}, key=lambda d: d.value):
+    for domain in sorted({k[0] for k in index_a} | {k[0] for k in index_b}, key=lambda d: d.value):
         for structure in CHANNEL_NAMES:
-            p, f, t = plain.get((domain, structure)), film.get((domain, structure)), tests.get((domain, structure))
-            images = (p or f).test_image_count if (p or f) else 0
+            a, b, t = index_a.get((domain, structure)), index_b.get((domain, structure)), tests.get((domain, structure))
+            images = (a or b).test_image_count if (a or b) else 0
             if t is None:
                 delta, pv, ph, sig = "—", "—", "—", "—"
             else:
                 delta, pv, ph = f"{t.mean_difference:+.4f}", f"{t.p_value:.4g}", f"{t.p_adjusted:.4g}"
                 sig = "**yes**" if t.significant else "no"
             lines.append(
-                f"| `{domain.value}` | {structure} | {images} | {_fmt(p)} | {_fmt(f)} | {delta} | {pv} | {ph} | {sig} |"
+                f"| `{domain.value}` | {structure} | {images} | {_fmt(a)} | {_fmt(b)} | {delta} | {pv} | {ph} | {sig} |"
             )
     lines.append("")
-    lines.append(f"Plain arm: `{plain_arm}`. FiLM arm: `{film_arm}`.")
+    lines.append(f"{arm_a.describe()} {arm_b.describe()}")
     return "\n".join(lines)
 
 
 def render_penalty_table(cells: Sequence[PenaltyCell]) -> str:
+    if not cells:
+        return "Neither arm is conditioned; there is no wrong-signal penalty to report."
     lines = [
-        "| Test domain | Structure | Own code Dice | Best other code (per seed) | Worst other code (per seed) | "
-        "Penalty (own − worst) | Own code best in N/seeds | Dice under each code (mean over seeds) |",
-        "|---|---|---:|---:|---:|---:|:---:|---|",
+        "| Test domain | Structure | Arm | Own signal Dice | Best other signal (per seed) | "
+        "Worst other signal (per seed) | Penalty (own − worst) | Own signal best in N/seeds | "
+        "Dice under each signal (mean over seeds) |",
+        "|---|---|---|---:|---:|---:|---:|:---:|---|",
     ]
-    for c in cells:
+    # Grouped by domain and structure, arms in the comparison's order within each.
+    order = {structure: index for index, structure in enumerate(CHANNEL_NAMES)}
+    for c in sorted(cells, key=lambda cell: (cell.domain.value, order[cell.structure])):
         codes = ", ".join(f"`{k}`: {v:.4f}" for k, v in c.sweep_by_code.items())
         lines.append(
-            f"| `{c.domain.value}` | {c.structure} | {c.own_code_dice:.4f} | {c.best_other_code_dice:.4f} | "
-            f"{c.worst_other_code_dice:.4f} | {c.own_code_dice - c.worst_other_code_dice:+.4f} | "
+            f"| `{c.domain.value}` | {c.structure} | {c.label} | {c.own_code_dice:.4f} | "
+            f"{c.best_other_code_dice:.4f} | {c.worst_other_code_dice:.4f} | "
+            f"{c.own_code_dice - c.worst_other_code_dice:+.4f} | "
             f"{c.own_code_was_best}/{len(c.seeds)} | {codes} |"
         )
     return "\n".join(lines)
 
 
 def render_markdown_report(
-    plain_cells, film_cells, results, penalties, plain_runs, film_runs, manifest_path, method
+    cells_a, cells_b, results, penalties, runs_a, runs_b, manifest_path, method
 ) -> str:
-    run = film_runs[0]
+    arm_a, arm_b = arm_identities(runs_a, runs_b)
+    run = runs_b[0]
     active = list(run.active_domains)
     lines: list[str] = []
     add = lines.append
-    add("# Step 4: train on all domains, test on each — Global FiLM against the plain U-Net")
+    add(f"# {REPORT_TITLE.format(arm_a=arm_a.label, arm_b=arm_b.label)}")
     add("")
     add(
         "**Evidence boundary.** Every figure is computed by `aggregate_stage4_all_domains.py` "
-        f"from the per-image metric CSVs of {len(plain_runs)} plain and {len(film_runs)} Global "
-        f"FiLM runs, validated against the shared budgeted manifest `{manifest_path.name}`. "
-        "Interpretation is written by hand."
+        f"from the per-image metric CSVs of {len(runs_a)} {arm_a.label} and {len(runs_b)} "
+        f"{arm_b.label} runs, validated against the shared budgeted manifest "
+        f"`{manifest_path.name}`. Interpretation is written by hand."
     )
     add("")
     add("## 1. Protocol")
@@ -389,33 +462,35 @@ def render_markdown_report(
         f"One model per seed trained on the pooled budgeted training partitions of "
         f"`{'`, `'.join(active)}` ({run.train_budget} each, {run.train_budget * len(active)} in total), "
         f"selected on their pooled validation ({run.val_budget * len(active)}), and scored on each "
-        f"domain's own {run.test_budget} locked test images. Nothing is held out: the FiLM arm is "
-        "trained with the true domain code and tested with it, the regime of the SpFiLM draft's "
-        "'both' setting. It asks whether conditioning helps when the camera is known, and — through "
-        "the fixed-code sweep — whether the network uses the code at all."
+        f"domain's own {run.test_budget} locked test images. Nothing is held out: a conditioned arm "
+        "is trained with each image's true conditioning signal and tested with its domain's own "
+        "signal, the regime of the SpFiLM draft's 'both' setting. It asks whether conditioning "
+        "helps when the camera is known, and — through the sweep over signals — whether the "
+        "network uses the conditioning signal at all."
     )
     add("")
     add("## 2. Dice per domain, side by side")
     add("")
     add(
         "Same backbone, folds, budget, seeds, augmentation, optimiser and test images; the arms "
-        f"differ only in the conditioning. Δ is FiLM minus plain on per-image Dice with seeds "
-        f"averaged first; p-values are {method}, Holm-adjusted over {len(results)} tests, "
-        f"significance at α = {ALPHA}."
+        f"differ only in the conditioning. Δ is {arm_b.label} minus {arm_a.label} on per-image "
+        f"Dice with seeds averaged first; p-values are {method}, Holm-adjusted over "
+        f"{len(results)} tests, significance at α = {ALPHA}."
     )
     add("")
-    add(render_side_by_side(plain_cells, film_cells, results, plain_runs[0].arm, film_runs[0].arm))
+    add(render_side_by_side(cells_a, cells_b, results, arm_a, arm_b))
     add("")
-    add("## 3. Does the network use the code? The wrong-code penalty")
+    add("## 3. Does the network use the conditioning signal? The wrong-signal penalty")
     add("")
     add(
-        "Each FiLM model was also scored on every test domain under every *other* domain's "
-        "code. 'Penalty' is Dice under the domain's own code minus Dice under the worst other "
-        "code, where best and worst are taken per seed and then averaged, so they can differ "
-        "from the per-code means in the last column when the ordering of the other codes "
-        "changes between seeds. A penalty near zero means the codes are interchangeable and "
-        "the FiLM layers are inert; a clear penalty means the code carries information the "
-        "network acts on."
+        "Each conditioned model was also scored on every test domain under every *other* "
+        "training domain's conditioning signal. 'Penalty' is Dice under the domain's own signal "
+        "minus Dice under the worst other signal, where best and worst are taken per seed and "
+        "then averaged, so they can differ from the per-signal means in the last column when "
+        "the ordering of the other signals changes between seeds. A penalty near zero means the "
+        "signals are interchangeable and the conditioning layers are inert; a clear penalty "
+        "means the signal carries information the network acts on. Every conditioned arm of "
+        "the comparison has a row."
     )
     add("")
     add(render_penalty_table(penalties))
@@ -428,6 +503,8 @@ def render_markdown_report(
 
 
 def write_csv(results: Sequence[PairedResult], penalties: Sequence[PenaltyCell], path: Path) -> Path:
+    """Paired tests and penalty cells; ``arm_plain`` / ``arm_film`` hold arms A and B."""
+
     rows: list[dict[str, Any]] = []
     for r in results:
         rows.append({
@@ -441,7 +518,7 @@ def write_csv(results: Sequence[PairedResult], penalties: Sequence[PenaltyCell],
     for c in penalties:
         row: dict[str, Any] = {
             "kind": "wrong_code_penalty", "domain": c.domain.value, "structure": c.structure,
-            "seeds": " ".join(str(s) for s in c.seeds),
+            "arm": c.arm, "seeds": " ".join(str(s) for s in c.seeds),
             "own_code_dice": f"{c.own_code_dice:.6g}", "best_other_code_dice": f"{c.best_other_code_dice:.6g}",
             "worst_other_code_dice": f"{c.worst_other_code_dice:.6g}",
             "penalty_own_minus_worst": f"{c.own_code_dice - c.worst_other_code_dice:.6g}",
@@ -472,9 +549,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run-root", type=Path, action="append")
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--plain-arm", default=DEFAULT_PLAIN_ARM)
-    parser.add_argument("--film-arm", default=DEFAULT_FILM_ARM)
-    parser.add_argument("--expected-seeds", type=int, nargs="+", default=list(DEFAULT_EXPECTED_SEEDS))
+    add_arm_arguments(parser, DEFAULT_PLAIN_ARM, DEFAULT_FILM_ARM)
+    parser.add_argument(
+        "--expected-seeds",
+        type=int,
+        nargs="+",
+        default=list(DEFAULT_EXPECTED_SEEDS),
+        help="Seeds both arms must have; pass a subset (e.g. 42) before the grid is complete",
+    )
     parser.add_argument("--method", choices=PAIRED_METHODS, default="wilcoxon")
     parser.add_argument("--report-out", type=Path)
     parser.add_argument("--csv-out", type=Path)
@@ -485,32 +567,39 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     roots = [Path(r) for r in (args.run_root or list(DEFAULT_RUN_ROOTS))]
     try:
+        if args.arm_a == args.arm_b:
+            raise FixedLodoReportError(f"--arm-a and --arm-b both name {args.arm_a!r}")
         manifest_path = args.manifest.expanduser().resolve()
         runs = discover_runs(roots)
-        plain = select_runs(runs, args.plain_arm, args.expected_seeds)
-        film = select_runs(runs, args.film_arm, args.expected_seeds)
-        if plain[0].active_domains != film[0].active_domains:
+        runs_a = select_runs(runs, args.arm_a, args.expected_seeds)
+        runs_b = select_runs(runs, args.arm_b, args.expected_seeds)
+        if runs_a[0].active_domains != runs_b[0].active_domains:
             raise FixedLodoReportError(
-                f"Arms trained on different active domains: {plain[0].active_domains} vs {film[0].active_domains}"
+                f"Arms trained on different active domains: {runs_a[0].active_domains} "
+                f"vs {runs_b[0].active_domains}"
             )
-        verify_membership((*plain, *film), manifest_path)
-        plain_cells = build_cells(plain)
-        film_cells = build_cells(film)
-        substrate = build_substrate(plain, film)
-        results = paired_tests(substrate, method=args.method, reference_arm=args.film_arm)
-        penalties = build_penalty_cells(film)
+        verify_membership((*runs_a, *runs_b), manifest_path)
+        arm_a, arm_b = arm_identities(runs_a, runs_b)
+        cells_a = build_cells(runs_a, allow_single_seed=True)
+        cells_b = build_cells(runs_b, allow_single_seed=True)
+        substrate = build_substrate(runs_a, runs_b)
+        results = paired_tests(substrate, method=args.method, reference_arm=args.arm_b)
+        penalties = penalty_cells_for_arms((runs_a, arm_a), (runs_b, arm_b))
     except (FixedLodoReportError, OSError, ValueError, KeyError) as error:
         print(f"FATAL: {error}", file=sys.stderr)
         return 2
 
-    print(f"plain: {len(plain)} runs | film: {len(film)} runs | paired tests: {len(results)}")
+    print(
+        f"{arm_a.label}: {len(runs_a)} runs | {arm_b.label}: {len(runs_b)} runs | "
+        f"paired tests: {len(results)}"
+    )
     print()
-    print(render_side_by_side(plain_cells, film_cells, results, args.plain_arm, args.film_arm))
+    print(render_side_by_side(cells_a, cells_b, results, arm_a, arm_b))
     print()
     print(render_penalty_table(penalties))
     if args.report_out is not None:
         report = render_markdown_report(
-            plain_cells, film_cells, results, penalties, plain, film, manifest_path, args.method
+            cells_a, cells_b, results, penalties, runs_a, runs_b, manifest_path, args.method
         )
         args.report_out.parent.mkdir(parents=True, exist_ok=True)
         args.report_out.write_text(report + "\n", encoding="utf-8")

@@ -260,10 +260,65 @@ the fixed-code sweep; with one seed per arm the Dice cells read "(1 seed)":
 ```
 
 Nothing in the runner branches on which conditioning an arm uses, only on
-whether it has one: once `spatial_film` is an arm, a
-`stage5_lodo_spatial_film_*` config (copied from the Global FiLM one) runs
-through the same runner and is compared with plain by passing its experiment
-name as `--film-arm`.
+whether it has one, which is how SpFiLM joins.
+
+### SpFiLM (Step 5)
+
+The layer (`src/spfilm/film/spfilm.py`) is the draft's rank-K Spatial FiLM: per
+channel, the scale and shift are a bar set by the conditioning signal plus K
+basis maps computed from the image, weighted by coefficients set by the signal,
+clamped after assembly and computed in float32 under autocast. `SpatialFiLMUNet`
+(`src/spfilm/model.py`) puts it where Global FiLM sits, after each encoder block
+and the bottleneck; each level's basis generators read the input image resampled
+to that level, never the features. With K = 0 the layer and the network are
+Global FiLM exactly (a test copies the weights across). FOV gating
+(`film.fov_gating`, off by default) leaves pixels outside the field of view,
+including the letterbox border, unmodulated.
+
+The arm is `"arm": "spatial_film"` with `film.rank` (required and positive; 0 is
+refused, use `global_film`) and optional `film.fov_gating`. Each SpFiLM config is
+the Global FiLM config of the same protocol plus those keys and new names (a test
+asserts this), so SpFiLM runs through both existing runners on the same folds,
+seeds, test images and test-time signal rules. Plain and Global FiLM resume
+fingerprints are unchanged, so runs launched before Step 5 still resume.
+
+| Protocol | Configs | Submit script (job, limit) | Jobs |
+|---|---|---|---|
+| Train on all, test on each | `stage4_all_domains_spatial_film_k8_3dom{,_create}.json` | `submit_stage4_all_domains_spatial_film.sh <seed>` (`allsf_s4`, 3 h) | 5 |
+| Leave-one-domain-out | `stage5_lodo_spatial_film_k8_3dom{,_create}.json` | `submit_stage5_lodo_spatial_film.sh <held-out> <seed>` (`sfilm_s5`, 2 h) | 15 |
+
+```bash
+.spfilm/bin/python run_stage4_all_domains.py \
+  --config configs/stage4_all_domains_spatial_film_k8_3dom.json run --seed 42 --smoke --device cpu
+
+.spfilm/bin/python run_stage5_lodo.py \
+  --config configs/stage5_lodo_spatial_film_k8_3dom.json run \
+  --held-out-domain drishti_gs --seed 42 --smoke --device cpu
+```
+
+Both aggregators compare any two arms: `--arm-a` is the comparator and `--arm-b`
+the reference (Δ = B − A); `--plain-arm` / `--film-arm` are the older spellings
+of the same flags, and the defaults are still plain against Global FiLM. Arms
+are labelled from what their runs recorded, each Dice table names both arms'
+parameter counts, and every conditioned arm gets its own diagnostic rows (the
+LODO signal table, the train-on-all wrong-signal penalty), so SpFiLM against
+Global FiLM shows both. One seed per arm reads "(1 seed)":
+
+```bash
+.spfilm/bin/python aggregate_stage5_lodo.py \
+  --arm-a stage5_lodo_fixed_budget_global_film_3dom \
+  --arm-b stage5_lodo_fixed_budget_spatial_film_k8_3dom --expected-seeds 42
+
+.spfilm/bin/python aggregate_stage4_all_domains.py \
+  --arm-a stage4_all_domains_fixed_budget_plain_unet_3dom \
+  --arm-b stage4_all_domains_fixed_budget_spatial_film_k8_3dom --expected-seeds 42
+```
+
+A SpFiLM run writes what a Global FiLM run writes (Stage 4 output contract), and
+`conditioning.film` also records `rank` and `fov_gating`. Parameter counts at
+full size (base 16, five levels): plain 1,944,066; Global FiLM 2,611,170; SpFiLM
+K=2 3,128,618, K=8 4,667,042, K=16 6,718,274. Five SpFiLM levels need inputs of
+at least 48 px (runs use 512, smokes 128).
 
 ## Directory map
 
@@ -279,8 +334,9 @@ spfilm/
 │   ├── stage3.py                       # Stage 3 config and record resolution
 │   ├── losses.py                       # BCE + soft Dice training objective
 │   ├── metrics.py                      # per-image disc/cup Dice and IoU
-│   ├── model.py                        # plain 2D U-Net and its FiLM-conditioned wrapper
+│   ├── model.py                        # plain 2D U-Net and its Global FiLM / SpFiLM wrappers
 │   ├── film/global_film.py             # channel-wise FiLM layer (Step 4)
+│   ├── film/spfilm.py                  # rank-K Spatial FiLM layer (Step 5)
 │   ├── film/conditioning.py            # domain codes; nearest-source-domain rule at test
 │   ├── all_domains.py                  # train-on-all fold: pooled train/val, per-domain tests
 │   └── visualization.py                # mask and prediction QA figures
@@ -288,11 +344,11 @@ spfilm/
 ├── run_stage2.py                       # audit / inspect / train / all CLI
 ├── run_stage3_lodo.py                  # prepare / check / run LODO CLI
 ├── run_stage3_lodo_3_1_fixed.py        # fixed-budget LODO runner, plain and global_film arms
-├── aggregate_stage4_film.py            # LODO: FiLM next to plain, paired test, selector diagnostics
+├── aggregate_stage4_film.py            # LODO: two arms side by side, paired test, selector diagnostics
 ├── run_stage4_all_domains.py           # train on all active domains, test on each (both arms)
-├── aggregate_stage4_all_domains.py     # train-on-all: FiLM next to plain + wrong-code penalty
+├── aggregate_stage4_all_domains.py     # train-on-all: two arms side by side + wrong-signal penalty
 ├── run_stage5_lodo.py                  # Step 5 LODO runner: train on all active domains but one
-├── aggregate_stage5_lodo.py            # Step 5 LODO: conditioned arm next to plain, paired test
+├── aggregate_stage5_lodo.py            # Step 5 LODO: two arms side by side, paired test
 ├── plot_training_curves.py             # training curves from any run's history.csv, mid-run or after
 ├── submit_lodo_stage3.sh               # one CREATE fold/seed submission
 ├── STAGE2.md                           # research and execution protocol
