@@ -1,9 +1,9 @@
-"""How a conditioned model gets its domain code at train, validation, and test time.
+"""How a conditioned model gets its domain code (conditioning signal) at train, validation, and test time.
 
 Training and validation images come from the source domains, so their code is
 the true one (``OracleCondition``). Under leave-one-domain-out the test images
 come from a domain the model has never seen, so there is no valid code for
-them. The policy agreed with the supervisor (2026-09-12) is: *supply the code of
+them. In agreement with the Pushpendra (2026-09-12) is: *supply the code of
 the source domain whose distribution the held-out domain is closest to*, decided
 **once per held-out domain** (his choice over a per-image rule, so the method is
 simple to state in a paper). That is ``DomainCondition`` built from the

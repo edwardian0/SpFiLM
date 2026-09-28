@@ -1,0 +1,10 @@
+kind,held_out_domain,structure,arm_plain,arm_film,test_images,dice_mean_plain,dice_mean_film,mean_difference,median_difference,method,p_value,p_adjusted,significant,seeds,test_conditioning,chosen_code,selector_val_accuracy,selector_domain_accuracy,assigned_refuge_canon_val,assigned_refuge_zeiss,sweep_spread_disc,nearest_minus_best_disc,sweep_spread_cup,nearest_minus_best_cup,assigned_drishti_gs
+paired_test,drishti_gs,disc,stage5_lodo_fixed_budget_plain_unet_3dom,stage5_lodo_fixed_budget_global_film_3dom,50,0.865915,0.810704,-0.0552107,-0.0304159,wilcoxon,1.15832e-08,5.79162e-08,True,,,,,,,,,,,,
+paired_test,drishti_gs,cup,stage5_lodo_fixed_budget_plain_unet_3dom,stage5_lodo_fixed_budget_global_film_3dom,50,0.622269,0.571247,-0.0510227,-0.0368468,wilcoxon,3.04124e-07,1.21649e-06,True,,,,,,,,,,,,
+paired_test,refuge_canon_val,disc,stage5_lodo_fixed_budget_plain_unet_3dom,stage5_lodo_fixed_budget_global_film_3dom,50,0.879152,0.730933,-0.148219,-0.0865036,wilcoxon,2.43361e-13,1.46017e-12,True,,,,,,,,,,,,
+paired_test,refuge_canon_val,cup,stage5_lodo_fixed_budget_plain_unet_3dom,stage5_lodo_fixed_budget_global_film_3dom,50,0.678044,0.676256,-0.00178754,0.0339523,wilcoxon,0.708952,0.708952,False,,,,,,,,,,,,
+paired_test,refuge_zeiss,disc,stage5_lodo_fixed_budget_plain_unet_3dom,stage5_lodo_fixed_budget_global_film_3dom,50,0.863284,0.85366,-0.00962336,-0.00378581,wilcoxon,0.000573477,0.00172043,True,,,,,,,,,,,,
+paired_test,refuge_zeiss,cup,stage5_lodo_fixed_budget_plain_unet_3dom,stage5_lodo_fixed_budget_global_film_3dom,50,0.631772,0.639341,0.00756994,0.0144633,wilcoxon,0.0593562,0.118712,False,,,,,,,,,,,,
+conditioning,drishti_gs,,,,,,,,,,,,,42 43 44 45 46,nearest_domain,refuge_zeiss,1,1,0,50,0.0776454,-0.0776454,0.121303,-0.121303,
+conditioning,refuge_canon_val,,,,,,,,,,,,,42 43 44 45 46,nearest_domain,refuge_zeiss,0.9,1,,50,0.15487,-0.15487,0.0784006,-0.0562188,0
+conditioning,refuge_zeiss,,,,,,,,,,,,,42 43 44 45 46,nearest_domain,drishti_gs,1,1,0,,0.0365195,-0.0365195,0.125838,-0.125838,50
