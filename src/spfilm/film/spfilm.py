@@ -1,3 +1,14 @@
+"""Rank-K Spatial FiLM layers for two-dimensional feature maps.
+
+Spatial FiLM augments the global per-channel scale and shift with independent,
+image-conditioned scale and shift basis maps. Domain-conditioned coefficients
+mix those bases into dense fields before applying ``(1 + gamma) * F + beta``.
+With rank zero there are no basis modules and the layer reduces numerically to
+``GlobalFiLM``. This is the 2D adaptation of the reference 3D layer: it uses
+``Conv2d``/``InstanceNorm2d`` and bilinear interpolation. Modulation runs in
+float32 under autocast, and the assembled fields are clamped before use.
+"""
+
 from __future__ import annotations
 
 import torch
@@ -24,7 +35,7 @@ class SpatialBasis(nn.Module):
 
         self.rank = rank
         if self.rank < 1:
-            raise ValueError("Rank is less than 1.")
+            raise ValueError("rank must be positive")
 
         self.layer = nn.Sequential(
             nn.Conv2d(
@@ -43,6 +54,8 @@ class SpatialBasis(nn.Module):
         )
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
+        """Return ``rank`` smooth basis maps at the input image resolution."""
+
         height, width = image.shape[-2:]
         basis_maps = self.layer(image)
         return F.interpolate(
@@ -107,6 +120,8 @@ class SpatialFiLM(nn.Module):
         self,
         embedding: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return ``gamma_bar, A, beta_bar, B`` in the documented MLP layout."""
+
         if embedding.dim() != 2:
             raise ValueError(
                 f"embedding must be (N, embedding_dim), got "
@@ -142,6 +157,8 @@ class SpatialFiLM(nn.Module):
         size: tuple[int, int],
         fov_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Assemble and clamp the dense gamma and beta modulation fields."""
+
         if image.dim() != 4:
             raise ValueError(
                 f"image must be a 4-D tensor shaped (N, C, H, W), got "
@@ -191,16 +208,77 @@ class SpatialFiLM(nn.Module):
         gamma = gamma.clamp(-self.clamp, self.clamp)
         beta = beta.clamp(-self.clamp, self.clamp)
 
-        # FOV Gating
+        # Gating is deliberately ignored unless the layer was configured to use it.
         if self.fov_gating and fov_mask is not None:
-            if tuple(fov_mask.shape[-2:]) != tuple(fov_mask.size()):
+            if fov_mask.dim() != 4:
                 raise ValueError(
-                    f"FOV mask must be (N, embedding_dim), got "
-                    f"{tuple(embedding.shape)}"
+                    f"fov_mask must be (N, 1, H, W), got {tuple(fov_mask.shape)}"
+                )
+            if fov_mask.shape[1] != 1:
+                raise ValueError(
+                    f"fov_mask must have exactly one channel, got "
+                    f"{fov_mask.shape[1]}"
+                )
+            if fov_mask.shape[0] != gamma.shape[0]:
+                raise ValueError(
+                    f"batch mismatch: {gamma.shape[0]} fields but "
+                    f"{fov_mask.shape[0]} masks"
                 )
 
-            if self.num_channels != 1:
-                raise ValueError()
+            resized_mask = F.interpolate(
+                fov_mask.float(),
+                size=size,
+                mode="nearest",
+            )
 
-            if 
+            gamma = gamma * resized_mask
+            beta = beta * resized_mask
+
         return gamma, beta
+
+    def forward(
+        self,
+        features: torch.Tensor,
+        image: torch.Tensor,
+        embedding: torch.Tensor,
+        fov_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Apply spatial FiLM in float32 and preserve the feature dtype."""
+
+        if features.dim() != 4 or features.shape[1] != self.num_channels:
+            raise ValueError(
+                f"features must be (N, {self.num_channels}, H, W), got "
+                f"{tuple(features.shape)}"
+            )
+        if image.dim() != 4:
+            raise ValueError(
+                f"image must be a 4-D tensor shaped (N, C, H, W), got "
+                f"{tuple(image.shape)}"
+            )
+        if embedding.dim() != 2:
+            raise ValueError(
+                f"embedding must be (N, embedding_dim), got "
+                f"{tuple(embedding.shape)}"
+            )
+        if not (features.shape[0] == image.shape[0] == embedding.shape[0]):
+            raise ValueError(
+                f"batch mismatch: {features.shape[0]} feature maps, "
+                f"{image.shape[0]} images, and {embedding.shape[0]} embeddings"
+            )
+        if tuple(features.shape[-2:]) != tuple(image.shape[-2:]):
+            raise ValueError(
+                f"image spatial size {tuple(image.shape[-2:])} does not match "
+                f"feature spatial size {tuple(features.shape[-2:])}"
+            )
+
+        with torch.autocast(device_type=features.device.type, enabled=False):
+            gamma, beta = self.fields(
+                image=image,
+                embedding=embedding,
+                size=tuple(features.shape[-2:]),
+                fov_mask=fov_mask,
+            )
+            features_f = features.float()
+            modulated = (1.0 + gamma) * features_f + beta
+
+        return modulated.to(features.dtype)
